@@ -12,6 +12,8 @@ export type Residente = {
   lote: string;
   telefono: string;
   dni: string;
+  rol: string;
+  foto_url: string;
   created_at: string;
 };
 
@@ -28,6 +30,7 @@ export type Autorizado = {
   fecha_expiracion: string;
   autorizado: boolean;
   link_token: string;
+  foto_url: string;
   residente_nombre?: string;
   created_at: string;
 };
@@ -48,6 +51,7 @@ export type Registro = {
   motivo_manual: string;
   autorizado_por: string;
   es_entrada: boolean;
+  foto_url: string;
   fecha_hora: string;
 };
 
@@ -58,7 +62,7 @@ export async function getResidentes(): Promise<Residente[]> {
     await ensureTables();
     const sql = getSql();
     return (await sql`
-      SELECT id, nombre, apellido, lote, telefono, dni, created_at
+      SELECT id, nombre, apellido, lote, telefono, dni, rol, foto_url, created_at
       FROM residentes
       ORDER BY apellido, nombre
     `) as unknown as Residente[];
@@ -74,6 +78,8 @@ export async function createResidente(prevState: any, formData: FormData) {
   const lote = String(formData.get("lote") || "").trim();
   const telefono = String(formData.get("telefono") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
+  const rol = String(formData.get("rol") || "propietario").trim();
+  const foto_url = String(formData.get("foto_url") || "").trim();
 
   if (!nombre || !apellido || !lote || !dni) {
     return { error: "Nombre, apellido, lote y DNI son obligatorios." };
@@ -83,15 +89,40 @@ export async function createResidente(prevState: any, formData: FormData) {
     await ensureTables();
     const sql = getSql();
     await sql`
-      INSERT INTO residentes (nombre, apellido, lote, telefono, dni)
-      VALUES (${nombre}, ${apellido}, ${lote}, ${telefono}, ${dni})
+      INSERT INTO residentes (nombre, apellido, lote, telefono, dni, rol, foto_url)
+      VALUES (${nombre}, ${apellido}, ${lote}, ${telefono}, ${dni}, ${rol}, ${foto_url || null})
       ON CONFLICT (dni) DO UPDATE SET
-        nombre = ${nombre}, apellido = ${apellido}, lote = ${lote}, telefono = ${telefono}
+        nombre = ${nombre}, apellido = ${apellido}, lote = ${lote},
+        telefono = ${telefono}, rol = ${rol}, foto_url = ${foto_url || null}
     `;
     revalidatePath("/maestros");
     return { success: true, message: "Residente guardado correctamente." };
   } catch (error: any) {
     return { error: error.message || "Error al guardar residente." };
+  }
+}
+
+export async function updateResidente(id: number, prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const lote = String(formData.get("lote") || "").trim();
+  const telefono = String(formData.get("telefono") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
+  const rol = String(formData.get("rol") || "propietario").trim();
+  const foto_url = String(formData.get("foto_url") || "").trim();
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    await sql`
+      UPDATE residentes SET nombre=${nombre}, apellido=${apellido}, lote=${lote},
+        telefono=${telefono}, dni=${dni}, rol=${rol}, foto_url=${foto_url || null}
+      WHERE id = ${id}
+    `;
+    revalidatePath("/maestros");
+    return { success: true, message: "Residente actualizado." };
+  } catch (error: any) {
+    return { error: error.message };
   }
 }
 
@@ -115,7 +146,8 @@ export async function getAutorizados(): Promise<Autorizado[]> {
     const sql = getSql();
     return (await sql`
       SELECT a.id, a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente,
-             a.residente_id, a.lote, a.fecha_expiracion, a.autorizado, a.link_token, a.created_at,
+             a.residente_id, a.lote, a.fecha_expiracion, a.autorizado, a.link_token,
+             a.foto_url, a.created_at,
              r.nombre || ' ' || r.apellido AS residente_nombre
       FROM autorizados a
       LEFT JOIN residentes r ON r.id = a.residente_id
@@ -135,6 +167,7 @@ export async function createAutorizado(prevState: any, formData: FormData) {
   const observaciones = String(formData.get("observaciones") || "").trim();
   const patente = String(formData.get("patente") || "").trim();
   const lote = String(formData.get("lote") || "").trim();
+  const foto_url = String(formData.get("foto_url") || "").trim();
 
   if (!nombre || !apellido || !dni) {
     return { error: "Nombre, apellido y DNI son obligatorios." };
@@ -144,13 +177,39 @@ export async function createAutorizado(prevState: any, formData: FormData) {
     await ensureTables();
     const sql = getSql();
     await sql`
-      INSERT INTO autorizados (nombre, apellido, dni, tipo, observaciones, patente, lote, autorizado)
-      VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${observaciones}, ${patente || null}, ${lote}, true)
+      INSERT INTO autorizados (nombre, apellido, dni, tipo, observaciones, patente, lote, autorizado, foto_url)
+      VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${observaciones}, ${patente || null}, ${lote}, true, ${foto_url || null})
     `;
     revalidatePath("/maestros");
     return { success: true, message: "Autorizado guardado correctamente." };
   } catch (error: any) {
     return { error: error.message || "Error al guardar autorizado." };
+  }
+}
+
+export async function updateAutorizado(id: number, prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
+  const tipo = String(formData.get("tipo") || "permanente").trim();
+  const observaciones = String(formData.get("observaciones") || "").trim();
+  const patente = String(formData.get("patente") || "").trim();
+  const lote = String(formData.get("lote") || "").trim();
+  const foto_url = String(formData.get("foto_url") || "").trim();
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    await sql`
+      UPDATE autorizados SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
+        tipo=${tipo}, observaciones=${observaciones}, patente=${patente || null},
+        lote=${lote}, foto_url=${foto_url || null}
+      WHERE id = ${id}
+    `;
+    revalidatePath("/maestros");
+    return { success: true, message: "Autorizado actualizado." };
+  } catch (error: any) {
+    return { error: error.message };
   }
 }
 
@@ -243,13 +302,31 @@ export async function searchPersona(dni: string) {
     const sql = getSql();
 
     const autorizado = (await sql`
-      SELECT a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente, a.lote, a.autorizado,
+      SELECT a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente, a.lote, a.autorizado, a.foto_url,
              r.nombre || ' ' || r.apellido AS residente_nombre
       FROM autorizados a
       LEFT JOIN residentes r ON r.id = a.residente_id
       WHERE a.dni = ${dni}
       LIMIT 1
     `) as any[];
+
+    if (autorizado.length === 0) {
+      const residente = (await sql`
+        SELECT nombre, apellido, dni, lote, foto_url
+        FROM residentes WHERE dni = ${dni} LIMIT 1
+      `) as any[];
+      if (residente.length > 0) {
+        return {
+          autorizado: {
+            ...residente[0],
+            tipo: "residente",
+            autorizado: true,
+            es_residente: true,
+          },
+          ultimoRegistro: null,
+        };
+      }
+    }
 
     const ultimoRegistro = (await sql`
       SELECT nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
@@ -285,6 +362,7 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   const motivo_manual = String(formData.get("motivo_manual") || "").trim();
   const autorizado_por = String(formData.get("autorizado_por") || "").trim();
   const es_entrada = formData.get("es_entrada") === "true";
+  const foto_url = String(formData.get("foto_url") || "").trim();
 
   if (!nombre || !apellido || !dni) {
     return { error: "Nombre, apellido y DNI son obligatorios." };
@@ -300,10 +378,10 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
     await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
-                             autorizado_por, es_entrada)
+                             autorizado_por, es_entrada, foto_url)
       VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
               ${residente_nombre}, ${lote_destino}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${autorizado_por}, ${es_entrada})
+              ${autorizado_por}, ${es_entrada}, ${foto_url || null})
     `;
     revalidatePath("/");
     return {
@@ -312,6 +390,46 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
     };
   } catch (error: any) {
     return { error: error.message || "Error al registrar movimiento." };
+  }
+}
+
+export async function updateRegistro(id: number, prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
+  const tipo = String(formData.get("tipo") || "").trim();
+  const vehiculo_tipo = String(formData.get("vehiculo_tipo") || "").trim();
+  const patente = String(formData.get("patente") || "").trim();
+  const lote_destino = String(formData.get("lote_destino") || "").trim();
+  const observaciones = String(formData.get("observaciones") || "").trim();
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    await sql`
+      UPDATE registros SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
+        tipo=${tipo}, vehiculo_tipo=${vehiculo_tipo}, patente=${patente},
+        lote_destino=${lote_destino}, observaciones=${observaciones}
+      WHERE id = ${id}
+    `;
+    revalidatePath("/");
+    revalidatePath("/informes");
+    return { success: true, message: "Registro actualizado." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+export async function deleteRegistro(id: number) {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    await sql`DELETE FROM registros WHERE id = ${id}`;
+    revalidatePath("/");
+    revalidatePath("/informes");
+    return { success: true };
+  } catch (error: any) {
+    return { error: error.message };
   }
 }
 

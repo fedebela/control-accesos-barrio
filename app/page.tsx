@@ -21,6 +21,17 @@ export default function HomePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
+  const [formNombre, setFormNombre] = useState("");
+  const [formApellido, setFormApellido] = useState("");
+  const [formDni, setFormDni] = useState("");
+  const [formTipo, setFormTipo] = useState("visita");
+  const [formLote, setFormLote] = useState("");
+  const [formPatente, setFormPatente] = useState("");
+  const [formVehiculo, setFormVehiculo] = useState("");
+  const [formResidenteNombre, setFormResidenteNombre] = useState("");
+  const [formObservaciones, setFormObservaciones] = useState("");
+  const [formFotoUrl, setFormFotoUrl] = useState("");
+
   useEffect(() => {
     if (scanRef.current) scanRef.current.focus();
   }, [mode]);
@@ -56,6 +67,16 @@ export default function HomePage() {
   };
 
   const handleConfirm = () => {
+    if (!searchResult?.autorizado) return;
+    const a = searchResult.autorizado;
+    setFormNombre(a.nombre || "");
+    setFormApellido(a.apellido || "");
+    setFormDni(a.dni || "");
+    setFormTipo(a.tipo || "visita");
+    setFormLote(a.lote || "");
+    setFormPatente(a.patente || "");
+    setFormResidenteNombre(a.residente_nombre || "");
+    setFormFotoUrl(a.foto_url || "");
     setShowConfirm(false);
   };
 
@@ -144,6 +165,15 @@ export default function HomePage() {
                 <div style={styles.previewBadge}>
                   {searchResult.autorizado.autorizado ? "✅ AUTORIZADO" : "⏳ PENDIENTE DE AUTORIZACIÓN"}
                 </div>
+                {searchResult.autorizado.foto_url && (
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    <img
+                      src={searchResult.autorizado.foto_url}
+                      alt={`${searchResult.autorizado.nombre} ${searchResult.autorizado.apellido}`}
+                      style={{ width: 80, height: 80, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0" }}
+                    />
+                  </div>
+                )}
                 <div style={styles.previewRow}>
                   <span style={styles.previewLabel}>Nombre:</span>
                   <span>{searchResult.autorizado.nombre} {searchResult.autorizado.apellido}</span>
@@ -208,20 +238,73 @@ export default function HomePage() {
           <input type="hidden" name="es_entrada" value={mode === "entrada" ? "true" : "false"} />
           <input type="hidden" name="es_manual" value={manualMode ? "true" : "false"} />
           <input type="hidden" name="motivo_manual" value={motivoManual} />
+          <input type="hidden" name="foto_url" value={formFotoUrl} />
 
-          {searchResult?.autorizado && (
+          {formNombre ? (
             <>
-              <input type="hidden" name="nombre" value={searchResult.autorizado.nombre} />
-              <input type="hidden" name="apellido" value={searchResult.autorizado.apellido} />
-              <input type="hidden" name="dni" value={searchResult.autorizado.dni} />
-              <input type="hidden" name="tipo" value={searchResult.autorizado.tipo || "visita"} />
-              <input type="hidden" name="lote_destino" value={searchResult.autorizado.lote} />
-              <input type="hidden" name="residente_nombre" value={searchResult.autorizado.residente_nombre || ""} />
-              <input type="hidden" name="patente" value={searchResult.autorizado.patente || ""} />
-            </>
-          )}
+              <input type="hidden" name="nombre" value={formNombre} />
+              <input type="hidden" name="apellido" value={formApellido} />
+              <input type="hidden" name="dni" value={formDni} />
+              <input type="hidden" name="tipo" value={formTipo} />
+              <input type="hidden" name="lote_destino" value={formLote} />
+              <input type="hidden" name="residente_nombre" value={formResidenteNombre} />
+              <input type="hidden" name="patente" value={formPatente} />
 
-          {!searchResult?.autorizado && (
+              <div style={styles.previewConfirmCard}>
+                {formFotoUrl && (
+                  <img
+                    src={formFotoUrl}
+                    alt={`${formNombre} ${formApellido}`}
+                    style={{ width: 60, height: 60, borderRadius: "0.5rem", objectFit: "cover", marginBottom: "0.5rem" }}
+                  />
+                )}
+                <p style={{ margin: 0, fontWeight: 700 }}>{formNombre} {formApellido}</p>
+                <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>DNI: {formDni}</p>
+                <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Tipo: {formTipo}</p>
+                {formLote && <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Lote: {formLote}</p>}
+              </div>
+
+              <div style={styles.field}>
+                <label style={styles.label}>Vehículo</label>
+                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => setFormVehiculo(e.target.value)} style={styles.input}>
+                  <option value="">Sin vehículo</option>
+                  <option value="automovil">Automóvil</option>
+                  <option value="camion">Camión</option>
+                  <option value="moto">Moto</option>
+                  <option value="bicicleta">Bicicleta</option>
+                  <option value="peaton">Peatón</option>
+                </select>
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Patente</label>
+                <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Opcional" />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Observaciones</label>
+                <input name="observaciones" type="text" value={formObservaciones} onChange={(e) => setFormObservaciones(e.target.value)} style={styles.input} />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Lote donde se autoriza</label>
+                <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} />
+              </div>
+
+              {manualMode && mode === "entrada" && (
+                <div style={styles.field}>
+                  <label style={styles.label}>Motivo de carga manual *</label>
+                  <textarea
+                    required
+                    value={motivoManual}
+                    onChange={(e) => setMotivoManual(e.target.value.slice(0, 200))}
+                    placeholder="Describí el motivo..."
+                    style={styles.input}
+                    rows={2}
+                    maxLength={200}
+                  />
+                  <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>{motivoManual.length}/200</span>
+                </div>
+              )}
+            </>
+          ) : (
             <>
               <div style={styles.field}>
                 <label style={styles.label}>Nombre</label>
@@ -240,13 +323,13 @@ export default function HomePage() {
                 <select name="tipo" style={styles.input}>
                   <option value="visita">Visita</option>
                   <option value="proveedor">Proveedor</option>
-                  <option value="delivery">Delivery</option>
+                  <option value="servicio">Servicio</option>
                 </select>
               </div>
             </>
           )}
 
-          {mode === "entrada" && (
+          {mode === "entrada" && !formNombre && (
             <>
               <div style={styles.field}>
                 <label style={styles.label}>Vehículo</label>
@@ -266,27 +349,31 @@ export default function HomePage() {
             </>
           )}
 
-          <div style={styles.field}>
-            <label style={styles.label}>Observaciones</label>
-            <input name="observaciones" type="text" style={styles.input} />
-          </div>
+          {!formNombre && (
+            <>
+              <div style={styles.field}>
+                <label style={styles.label}>Observaciones</label>
+                <input name="observaciones" type="text" style={styles.input} />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Lote donde se autoriza</label>
+                <input name="autorizado_por" type="text" style={styles.input} placeholder="Lote del residente" />
+              </div>
+            </>
+          )}
 
-          <div style={styles.field}>
-            <label style={styles.label}>Autorizado por (residente)</label>
-            <input name="autorizado_por" type="text" style={styles.input} placeholder="Nombre del residente que autoriza" />
-          </div>
-
-          {manualMode && mode === "entrada" && (
+          {manualMode && mode === "entrada" && !formNombre && (
             <div style={styles.field}>
               <label style={styles.label}>Motivo de carga manual *</label>
               <input
                 type="text"
                 required
                 value={motivoManual}
-                onChange={(e) => setMotivoManual(e.target.value)}
+                onChange={(e) => setMotivoManual(e.target.value.slice(0, 200))}
                 placeholder="Ej: Scanner no funciona, DNI dañado..."
                 style={styles.input}
               />
+              <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>{motivoManual.length}/200</span>
             </div>
           )}
 
@@ -372,6 +459,7 @@ const styles: Record<string, React.CSSProperties> = {
   previewSubtitle: { margin: "0.5rem 0 0.3rem", fontSize: "0.95rem", fontWeight: 700, color: "#334155" },
   previewText: { fontSize: "0.9rem", color: "#64748b" },
   confirmBtn: { width: "100%", padding: "0.85rem", borderRadius: "0.75rem", border: "none", background: "#0f766e", color: "#fff", fontWeight: 700, cursor: "pointer", marginTop: "0.5rem" },
+  previewConfirmCard: { background: "#f0fdf4", borderRadius: "0.75rem", padding: "1rem", marginBottom: "0.75rem", border: "1px solid #bbf7d0", textAlign: "center" as const },
   form: { display: "flex", flexDirection: "column", gap: "0.85rem" },
   field: { display: "flex", flexDirection: "column", gap: "0.35rem" },
   input: { padding: "0.8rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none" },

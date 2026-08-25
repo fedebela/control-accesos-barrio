@@ -28,6 +28,8 @@ export async function ensureTables() {
       lote VARCHAR(20) NOT NULL,
       telefono VARCHAR(30),
       dni VARCHAR(20) NOT NULL UNIQUE,
+      rol VARCHAR(20) DEFAULT 'propietario',
+      foto_url TEXT,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -46,6 +48,7 @@ export async function ensureTables() {
       fecha_expiracion DATE,
       autorizado BOOLEAN DEFAULT FALSE,
       link_token VARCHAR(100) UNIQUE,
+      foto_url TEXT,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -67,6 +70,7 @@ export async function ensureTables() {
       motivo_manual TEXT,
       autorizado_por VARCHAR(100),
       es_entrada BOOLEAN NOT NULL,
+      foto_url TEXT,
       fecha_hora TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
   `;
