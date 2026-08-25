@@ -445,6 +445,10 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
     return { error: "Si es carga manual, debe indicar el motivo." };
   }
 
+  if (!autorizado_por) {
+    return { error: es_entrada ? "Debe indicar el lote que autoriza." : "Debe indicar el lote donde se retira." };
+  }
+
   if (es_entrada) {
     const cargadoReciente = await checkDniCargadoReciente(dni);
     if (cargadoReciente) {
