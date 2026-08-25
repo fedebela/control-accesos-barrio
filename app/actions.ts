@@ -330,7 +330,7 @@ export async function searchPersona(dni: string) {
 
     const ultimoRegistro = (await sql`
       SELECT nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
-             residente_nombre, lote_destino, es_entrada, fecha_hora
+             residente_nombre, lote_destino, es_entrada, foto_url, fecha_hora
       FROM registros
       WHERE dni = ${dni}
       ORDER BY fecha_hora DESC

@@ -8,6 +8,85 @@ type SearchPersonaResult = {
   ultimoRegistro: any;
 } | null;
 
+function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [cameraMode, setCameraMode] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  useEffect(() => {
+    return () => { if (stream) stream.getTracks().forEach((t) => t.stop()); };
+  }, [stream]);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const max = 300;
+        let w = img.width, h = img.height;
+        if (w > h && w > max) { h = (h * max) / w; w = max; }
+        else if (h > max) { w = (w * max) / h; h = max; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+        onChange(canvas.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 300, height: 300 } });
+      setStream(s); setCameraMode(true);
+      setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = s; }, 100);
+    } catch { alert("No se pudo acceder a la cámara."); }
+  }
+
+  function capture() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext("2d")!.drawImage(video, 0, 0);
+    onChange(canvas.toDataURL("image/jpeg", 0.7));
+    stopCamera();
+  }
+
+  function stopCamera() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    setStream(null); setCameraMode(false);
+  }
+
+  return (
+    <div style={{ marginBottom: "0.75rem" }}>
+      <label style={styles.label}>{label}</label>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", marginTop: "0.25rem" }}>
+        <button type="button" onClick={() => fileRef.current?.click()} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" }}>Seleccionar archivo</button>
+        <button type="button" onClick={startCamera} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" }}>Usar cámara</button>
+        {value && <button type="button" onClick={() => onChange("")} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", cursor: "pointer" }}>Quitar</button>}
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+      {cameraMode && (
+        <div style={{ marginBottom: "0.5rem" }}>
+          <video ref={videoRef} autoPlay playsInline style={{ width: 100, height: 100, borderRadius: "0.5rem", border: "1px solid #d1d5db", objectFit: "cover" }} />
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+            <button type="button" onClick={capture} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "none", background: "#16a34a", color: "#fff", cursor: "pointer" }}>Capturar</button>
+            <button type="button" onClick={stopCamera} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "none", background: "#94a3b8", color: "#fff", cursor: "pointer" }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {value && !cameraMode && (
+        <img src={value} alt="Foto" style={{ width: 60, height: 60, borderRadius: "0.5rem", objectFit: "cover", border: "1px solid #e2e8f0" }} />
+      )}
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [mode, setMode] = useState<"entrada" | "salida">("entrada");
   const [dniInput, setDniInput] = useState("");
@@ -69,6 +148,7 @@ export default function HomePage() {
   const handleConfirm = () => {
     if (!searchResult?.autorizado) return;
     const a = searchResult.autorizado;
+    const fotoFromLast = searchResult.ultimoRegistro?.foto_url || "";
     setFormNombre(a.nombre || "");
     setFormApellido(a.apellido || "");
     setFormDni(a.dni || "");
@@ -76,9 +156,15 @@ export default function HomePage() {
     setFormLote(a.lote || "");
     setFormPatente(a.patente || "");
     setFormResidenteNombre(a.residente_nombre || "");
-    setFormFotoUrl(a.foto_url || "");
+    setFormFotoUrl(a.foto_url || fotoFromLast);
     setShowConfirm(false);
   };
+
+  function getPreviewFoto() {
+    if (searchResult?.autorizado?.foto_url) return searchResult.autorizado.foto_url;
+    if (searchResult?.ultimoRegistro?.foto_url) return searchResult.ultimoRegistro.foto_url;
+    return null;
+  }
 
   return (
     <div style={styles.container}>
@@ -165,10 +251,10 @@ export default function HomePage() {
                 <div style={styles.previewBadge}>
                   {searchResult.autorizado.autorizado ? "✅ AUTORIZADO" : "⏳ PENDIENTE DE AUTORIZACIÓN"}
                 </div>
-                {searchResult.autorizado.foto_url && (
+                {getPreviewFoto() && (
                   <div style={{ marginBottom: "0.5rem" }}>
                     <img
-                      src={searchResult.autorizado.foto_url}
+                      src={getPreviewFoto()!}
                       alt={`${searchResult.autorizado.nombre} ${searchResult.autorizado.apellido}`}
                       style={{ width: 80, height: 80, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0" }}
                     />
@@ -263,6 +349,8 @@ export default function HomePage() {
                 <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Tipo: {formTipo}</p>
                 {formLote && <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Lote: {formLote}</p>}
               </div>
+
+              <PhotoInput value={formFotoUrl} onChange={setFormFotoUrl} label="Foto de la persona (opcional)" />
 
               <div style={styles.field}>
                 <label style={styles.label}>Vehículo</label>
