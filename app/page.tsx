@@ -415,7 +415,7 @@ export default function HomePage() {
 
               <div style={styles.field}>
                 <label style={styles.label}>Tiene vehículo</label>
-                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => { setFormVehiculo(e.target.value); if (e.target.value === "no") setFormPatente(""); }} style={styles.input} disabled={mode === "salida"}>
+                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => { setFormVehiculo(e.target.value); if (e.target.value === "no") setFormPatente(""); }} style={styles.input}>
                   <option value="">Seleccionar...</option>
                   <option value="si">Sí</option>
                   <option value="no">No</option>
@@ -424,7 +424,7 @@ export default function HomePage() {
               {formVehiculo === "si" && (
                 <div style={styles.field}>
                   <label style={styles.label}>Patente</label>
-                  <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Ingresar patente" readOnly={mode === "salida"} />
+                  <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Ingresar patente" />
                 </div>
               )}
               <div style={styles.field}>
@@ -433,7 +433,7 @@ export default function HomePage() {
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>{mode === "salida" ? "Lote donde se retira" : "Lote donde se autoriza"}</label>
-                <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} readOnly={mode === "salida"} />
+                <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} />
               </div>
 
               {manualMode && mode === "entrada" && (
