@@ -148,15 +148,28 @@ export default function HomePage() {
   const handleConfirm = () => {
     if (!searchResult?.autorizado) return;
     const a = searchResult.autorizado;
-    const fotoFromLast = searchResult.ultimoRegistro?.foto_url || "";
+    const last = searchResult.ultimoRegistro;
+    const fotoFromLast = last?.foto_url || "";
+
     setFormNombre(a.nombre || "");
     setFormApellido(a.apellido || "");
     setFormDni(a.dni || "");
-    setFormTipo(a.tipo || "visita");
-    setFormLote(a.lote || "");
-    setFormPatente(a.patente || "");
-    setFormResidenteNombre(a.residente_nombre || "");
     setFormFotoUrl(a.foto_url || fotoFromLast);
+    setFormResidenteNombre(a.residente_nombre || "");
+
+    if (mode === "salida" && last) {
+      setFormTipo(last.tipo || a.tipo || "visita");
+      setFormLote(last.lote_destino || a.lote || "");
+      setFormPatente(last.patente || a.patente || "");
+      setFormVehiculo(last.vehiculo_tipo || "");
+      setFormObservaciones(last.observaciones || "");
+    } else {
+      setFormTipo(a.tipo || "visita");
+      setFormLote(a.lote || "");
+      setFormPatente(a.patente || "");
+      setFormVehiculo("");
+      setFormObservaciones("");
+    }
     setShowConfirm(false);
   };
 
@@ -354,7 +367,7 @@ export default function HomePage() {
 
               <div style={styles.field}>
                 <label style={styles.label}>Vehículo</label>
-                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => setFormVehiculo(e.target.value)} style={styles.input}>
+                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => setFormVehiculo(e.target.value)} style={styles.input} disabled={mode === "salida"}>
                   <option value="">Sin vehículo</option>
                   <option value="automovil">Automóvil</option>
                   <option value="camion">Camión</option>
@@ -365,7 +378,7 @@ export default function HomePage() {
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>Patente</label>
-                <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Opcional" />
+                <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Opcional" readOnly={mode === "salida"} />
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>Observaciones</label>
@@ -373,7 +386,7 @@ export default function HomePage() {
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>Lote donde se autoriza</label>
-                <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} />
+                <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} readOnly={mode === "salida"} />
               </div>
 
               {manualMode && mode === "entrada" && (
