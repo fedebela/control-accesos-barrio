@@ -216,7 +216,15 @@ export default function MaestrosPage() {
               <div style={styles.field}><label style={styles.label}>Lote</label><input name="lote" style={styles.input} /></div>
             </div>
             <div style={styles.formRow}>
-              <div style={styles.field}><label style={styles.label}>Patente</label><input name="patente" style={styles.input} /></div>
+              <div style={styles.field}>
+                <label style={styles.label}>Tiene vehículo</label>
+                <select name="vehiculo_tipo" style={styles.input}>
+                  <option value="">Seleccionar...</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+              <div style={styles.field}><label style={styles.label}>Patente</label><input name="patente" style={styles.input} placeholder="Ingresar patente" /></div>
               <div style={styles.field}><label style={styles.label}>Observaciones</label><input name="observaciones" style={styles.input} /></div>
             </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>

@@ -88,6 +88,18 @@ export async function createResidente(prevState: any, formData: FormData) {
   try {
     await ensureTables();
     const sql = getSql();
+
+    const existeEnOtraTabla = (await sql`
+      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
+      UNION ALL
+      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
+      LIMIT 1
+    `) as any[];
+
+    if (existeEnOtraTabla.length > 0) {
+      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    }
+
     await sql`
       INSERT INTO residentes (nombre, apellido, lote, telefono, dni, rol, foto_url)
       VALUES (${nombre}, ${apellido}, ${lote}, ${telefono}, ${dni}, ${rol}, ${foto_url || null})
@@ -176,6 +188,20 @@ export async function createAutorizado(prevState: any, formData: FormData) {
   try {
     await ensureTables();
     const sql = getSql();
+
+    const existeEnOtraTabla = (await sql`
+      SELECT 'residentes' as tabla, dni FROM residentes WHERE dni = ${dni}
+      UNION ALL
+      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
+      UNION ALL
+      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
+      LIMIT 1
+    `) as any[];
+
+    if (existeEnOtraTabla.length > 0) {
+      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    }
+
     await sql`
       INSERT INTO autorizados (nombre, apellido, dni, tipo, observaciones, patente, lote, autorizado, foto_url)
       VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${observaciones}, ${patente || null}, ${lote}, true, ${foto_url || null})
@@ -243,6 +269,20 @@ export async function createInvitacion(prevState: any, formData: FormData) {
   try {
     await ensureTables();
     const sql = getSql();
+
+    const existeEnOtraTabla = (await sql`
+      SELECT 'residentes' as tabla, dni FROM residentes WHERE dni = ${dni}
+      UNION ALL
+      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
+      UNION ALL
+      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
+      LIMIT 1
+    `) as any[];
+
+    if (existeEnOtraTabla.length > 0) {
+      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    }
+
     const token = crypto.randomUUID().slice(0, 12);
 
     await sql`
@@ -364,6 +404,22 @@ export async function searchPersona(dni: string) {
   }
 }
 
+export async function checkDniCargadoReciente(dni: string) {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const reciente = (await sql`
+      SELECT id FROM registros
+      WHERE dni = ${dni}
+        AND fecha_hora > NOW() - INTERVAL '5 minutes'
+      LIMIT 1
+    `) as any[];
+    return reciente.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function registrarMovimiento(prevState: any, formData: FormData) {
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
@@ -387,6 +443,13 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
 
   if (es_manual && !motivo_manual) {
     return { error: "Si es carga manual, debe indicar el motivo." };
+  }
+
+  if (es_entrada) {
+    const cargadoReciente = await checkDniCargadoReciente(dni);
+    if (cargadoReciente) {
+      return { error: "Ya fue cargado el DNI hace menos de 5 minutos." };
+    }
   }
 
   try {

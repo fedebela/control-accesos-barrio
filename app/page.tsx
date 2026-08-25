@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState, useRef, useEffect } from "react";
-import { searchPersona, registrarMovimiento } from "@/app/actions";
+import { searchPersona, registrarMovimiento, checkDniCargadoReciente } from "@/app/actions";
 
 type SearchPersonaResult = {
   autorizado: any;
@@ -149,25 +149,30 @@ export default function HomePage() {
     if (!searchResult?.autorizado) return;
     const a = searchResult.autorizado;
     const last = searchResult.ultimoRegistro;
-    const fotoFromLast = last?.foto_url || "";
 
     setFormNombre(a.nombre || "");
     setFormApellido(a.apellido || "");
     setFormDni(a.dni || "");
-    setFormFotoUrl(a.foto_url || fotoFromLast);
+    setFormFotoUrl(a.foto_url || last?.foto_url || "");
     setFormResidenteNombre(a.residente_nombre || "");
 
     if (mode === "salida" && last) {
       setFormTipo(last.tipo || a.tipo || "visita");
       setFormLote(last.lote_destino || a.lote || "");
       setFormPatente(last.patente || a.patente || "");
-      setFormVehiculo(last.vehiculo_tipo || "");
+      setFormVehiculo(last.vehiculo_tipo === "sin_vehiculo" ? "no" : last.vehiculo_tipo ? "si" : "");
       setFormObservaciones(last.observaciones || "");
+    } else if (last) {
+      setFormTipo(a.tipo || "visita");
+      setFormLote(a.lote || "");
+      setFormPatente(last.patente || a.patente || "");
+      setFormVehiculo(last.vehiculo_tipo === "sin_vehiculo" ? "no" : last.vehiculo_tipo ? "si" : (a.patente ? "si" : ""));
+      setFormObservaciones("");
     } else {
       setFormTipo(a.tipo || "visita");
       setFormLote(a.lote || "");
       setFormPatente(a.patente || "");
-      setFormVehiculo("");
+      setFormVehiculo(a.patente ? "si" : "");
       setFormObservaciones("");
     }
     setShowConfirm(false);
@@ -177,6 +182,18 @@ export default function HomePage() {
     if (searchResult?.autorizado?.foto_url) return searchResult.autorizado.foto_url;
     if (searchResult?.ultimoRegistro?.foto_url) return searchResult.ultimoRegistro.foto_url;
     return null;
+  }
+
+  function getPreviewBadge() {
+    if (!searchResult?.autorizado) return null;
+    const a = searchResult.autorizado;
+    if (a.es_residente) return { text: "RESIDENTE", color: "#166534", bg: "#dcfce7" };
+    if (a.es_registro_previo) return { text: "REGISTRO PREVIO", color: "#166534", bg: "#dcfce7" };
+    if (a.tipo === "permanente" && a.autorizado) return { text: "AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
+    if (a.tipo === "temporal" && a.autorizado) return { text: "AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
+    if (a.tipo === "habitual" && a.autorizado) return { text: "AUTORIZADO HABITUAL", color: "#166534", bg: "#dcfce7" };
+    if (!a.autorizado) return { text: "⏳ PENDIENTE DE AUTORIZACIÓN", color: "#92400e", bg: "#fef3c7" };
+    return { text: "✅ AUTORIZADO", color: "#166534", bg: "#dcfce7" };
   }
 
   return (
@@ -261,16 +278,22 @@ export default function HomePage() {
 
             {searchResult.autorizado ? (
               <div style={styles.previewSection}>
-                <div style={styles.previewBadge}>
-                  {searchResult.autorizado.autorizado ? "✅ AUTORIZADO" : "⏳ PENDIENTE DE AUTORIZACIÓN"}
-                </div>
-                {getPreviewFoto() && (
+                {getPreviewBadge() && (
+                  <div style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: "999px", background: getPreviewBadge()!.bg, color: getPreviewBadge()!.color, fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
+                    {getPreviewBadge()!.text}
+                  </div>
+                )}
+                {getPreviewFoto() ? (
                   <div style={{ marginBottom: "0.5rem" }}>
                     <img
                       src={getPreviewFoto()!}
                       alt={`${searchResult.autorizado.nombre} ${searchResult.autorizado.apellido}`}
                       style={{ width: 80, height: 80, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0" }}
                     />
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem" }}>
+                    ⚠️ Esta persona no tiene foto cargada
                   </div>
                 )}
                 <div style={styles.previewRow}>
@@ -327,9 +350,11 @@ export default function HomePage() {
               </div>
             )}
 
-            <button onClick={handleConfirm} style={styles.confirmBtn}>
-              Confirmar y cargar en formulario
-            </button>
+            {searchResult.autorizado && (
+              <button onClick={handleConfirm} style={styles.confirmBtn}>
+                Confirmar y cargar en formulario
+              </button>
+            )}
           </div>
         )}
 
@@ -366,26 +391,25 @@ export default function HomePage() {
               </div>
 
               <div style={styles.field}>
-                <label style={styles.label}>Vehículo</label>
-                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => setFormVehiculo(e.target.value)} style={styles.input} disabled={mode === "salida"}>
-                  <option value="">Sin vehículo</option>
-                  <option value="automovil">Automóvil</option>
-                  <option value="camion">Camión</option>
-                  <option value="moto">Moto</option>
-                  <option value="bicicleta">Bicicleta</option>
-                  <option value="peaton">Peatón</option>
+                <label style={styles.label}>Tiene vehículo</label>
+                <select name="vehiculo_tipo" value={formVehiculo} onChange={(e) => { setFormVehiculo(e.target.value); if (e.target.value === "no") setFormPatente(""); }} style={styles.input} disabled={mode === "salida"}>
+                  <option value="">Seleccionar...</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
                 </select>
               </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Patente</label>
-                <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Opcional" readOnly={mode === "salida"} />
-              </div>
+              {formVehiculo === "si" && (
+                <div style={styles.field}>
+                  <label style={styles.label}>Patente</label>
+                  <input name="patente" type="text" value={formPatente} onChange={(e) => setFormPatente(e.target.value)} style={styles.input} placeholder="Ingresar patente" readOnly={mode === "salida"} />
+                </div>
+              )}
               <div style={styles.field}>
                 <label style={styles.label}>Observaciones</label>
                 <input name="observaciones" type="text" value={formObservaciones} onChange={(e) => setFormObservaciones(e.target.value)} style={styles.input} />
               </div>
               <div style={styles.field}>
-                <label style={styles.label}>Lote donde se autoriza</label>
+                <label style={styles.label}>{mode === "salida" ? "Lote donde se retira" : "Lote donde se autoriza"}</label>
                 <input name="autorizado_por" type="text" value={formLote} onChange={(e) => setFormLote(e.target.value)} style={styles.input} readOnly={mode === "salida"} />
               </div>
 
@@ -427,37 +451,20 @@ export default function HomePage() {
                   <option value="servicio">Servicio</option>
                 </select>
               </div>
-            </>
-          )}
-
-          {mode === "entrada" && !formNombre && (
-            <>
               <div style={styles.field}>
-                <label style={styles.label}>Vehículo</label>
+                <label style={styles.label}>Tiene vehículo</label>
                 <select name="vehiculo_tipo" style={styles.input}>
-                  <option value="">Sin vehículo</option>
-                  <option value="automovil">Automóvil</option>
-                  <option value="camion">Camión</option>
-                  <option value="moto">Moto</option>
-                  <option value="bicicleta">Bicicleta</option>
-                  <option value="peaton">Peatón</option>
+                  <option value="">Seleccionar...</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
                 </select>
               </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Patente</label>
-                <input name="patente" type="text" style={styles.input} placeholder="Opcional" />
-              </div>
-            </>
-          )}
-
-          {!formNombre && (
-            <>
               <div style={styles.field}>
                 <label style={styles.label}>Observaciones</label>
                 <input name="observaciones" type="text" style={styles.input} />
               </div>
               <div style={styles.field}>
-                <label style={styles.label}>Lote donde se autoriza</label>
+                <label style={styles.label}>{mode === "salida" ? "Lote donde se retira" : "Lote donde se autoriza"}</label>
                 <input name="autorizado_por" type="text" style={styles.input} placeholder="Lote del residente" />
               </div>
             </>
@@ -553,7 +560,6 @@ const styles: Record<string, React.CSSProperties> = {
   previewCard: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1rem", border: "1px solid #e2e8f0" },
   previewTitle: { margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" },
   previewSection: { marginBottom: "0.75rem" },
-  previewBadge: { display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: "999px", background: "#dcfce7", color: "#166534", fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem" },
   previewBadgeWarn: { display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: "999px", background: "#fef3c7", color: "#92400e", fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem" },
   previewRow: { display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.95rem" },
   previewLabel: { fontWeight: 600, color: "#475569" },
