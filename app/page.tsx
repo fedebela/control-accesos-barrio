@@ -326,6 +326,8 @@ export default function HomePage() {
           <input type="hidden" name="motivo_manual" value={motivoManual} />
           <input type="hidden" name="foto_url" value={formFotoUrl} />
 
+          <PhotoInput value={formFotoUrl} onChange={setFormFotoUrl} label="Foto de la persona (opcional)" />
+
           {formNombre ? (
             <>
               <input type="hidden" name="nombre" value={formNombre} />
@@ -349,8 +351,6 @@ export default function HomePage() {
                 <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Tipo: {formTipo}</p>
                 {formLote && <p style={{ margin: "0.2rem 0", color: "#475569", fontSize: "0.9rem" }}>Lote: {formLote}</p>}
               </div>
-
-              <PhotoInput value={formFotoUrl} onChange={setFormFotoUrl} label="Foto de la persona (opcional)" />
 
               <div style={styles.field}>
                 <label style={styles.label}>Vehículo</label>
