@@ -337,8 +337,25 @@ export async function searchPersona(dni: string) {
       LIMIT 1
     `) as any[];
 
+    let autorizadoData = autorizado[0] || null;
+
+    if (!autorizadoData && ultimoRegistro.length > 0) {
+      const r = ultimoRegistro[0];
+      autorizadoData = {
+        nombre: r.nombre,
+        apellido: r.apellido,
+        dni: r.dni,
+        tipo: r.tipo,
+        patente: r.patente || "",
+        lote: r.lote_destino || "",
+        autorizado: true,
+        foto_url: r.foto_url || "",
+        es_registro_previo: true,
+      };
+    }
+
     return {
-      autorizado: autorizado[0] || null,
+      autorizado: autorizadoData,
       ultimoRegistro: ultimoRegistro[0] || null,
     };
   } catch (error) {
