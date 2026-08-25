@@ -53,6 +53,11 @@ export async function ensureTables() {
     );
   `;
 
+  await sql`ALTER TABLE residentes ADD COLUMN IF NOT EXISTS rol VARCHAR(20) DEFAULT 'propietario'`;
+  await sql`ALTER TABLE residentes ADD COLUMN IF NOT EXISTS foto_url TEXT`;
+  await sql`ALTER TABLE autorizados ADD COLUMN IF NOT EXISTS foto_url TEXT`;
+  await sql`ALTER TABLE registros ADD COLUMN IF NOT EXISTS foto_url TEXT`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS registros (
       id BIGSERIAL PRIMARY KEY,
