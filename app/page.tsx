@@ -208,6 +208,7 @@ export default function HomePage() {
     if (!searchResult?.autorizado) return null;
     const a = searchResult.autorizado;
     if (a.es_residente) return { text: "RESIDENTE", color: "#166534", bg: "#dcfce7" };
+    if (a.es_registro_previo && !a.autorizado) return { text: "REGISTRO PREVIO", color: "#991b1b", bg: "#fee2e2" };
     if (a.es_registro_previo) return { text: "REGISTRO PREVIO", color: "#166534", bg: "#dcfce7" };
     if (a.tipo === "permanente" && a.autorizado) return { text: "AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
     if (a.tipo === "temporal" && a.autorizado) return { text: "AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
