@@ -115,6 +115,26 @@ export default function HomePage() {
     if (scanRef.current) scanRef.current.focus();
   }, [mode]);
 
+  useEffect(() => {
+    if (manualState?.success) {
+      setDniInput("");
+      setSearchResult(null);
+      setShowConfirm(false);
+      setManualMode(false);
+      setMotivoManual("");
+      setFormNombre("");
+      setFormApellido("");
+      setFormDni("");
+      setFormTipo("visita");
+      setFormLote("");
+      setFormPatente("");
+      setFormVehiculo("");
+      setFormResidenteNombre("");
+      setFormObservaciones("");
+      setFormFotoUrl("");
+    }
+  }, [manualState]);
+
   const parseDniFromScan = (text: string): string | null => {
     const parts = text.split(",");
     for (const part of parts) {
