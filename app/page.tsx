@@ -412,24 +412,10 @@ export default function HomePage() {
                   <span style={styles.previewLabel}>Tipo:</span>
                   <span>{formTipo}</span>
                 </div>
-                {formLote && (
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Lote:</span>
-                    <span>{formLote}</span>
-                  </div>
-                )}
-                {formResidenteNombre && (
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Residente:</span>
-                    <span>{formResidenteNombre}</span>
-                  </div>
-                )}
-                {formPatente && (
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Patente:</span>
-                    <span>{formPatente}</span>
-                  </div>
-                )}
+                <div style={styles.previewRow}>
+                  <span style={styles.previewLabel}>Observaciones:</span>
+                  <span>{formObservaciones || "-"}</span>
+                </div>
               </div>
 
               {searchResult.ultimoRegistro && (
@@ -438,6 +424,10 @@ export default function HomePage() {
                   <div style={styles.previewRow}>
                     <span style={styles.previewLabel}>Fecha:</span>
                     <span>{new Date(searchResult.ultimoRegistro.fecha_hora).toLocaleString("es-AR")}</span>
+                  </div>
+                  <div style={styles.previewRow}>
+                    <span style={styles.previewLabel}>Patente:</span>
+                    <span>{searchResult.ultimoRegistro.patente || "-"}</span>
                   </div>
                   <div style={styles.previewRow}>
                     <span style={styles.previewLabel}>Lote:</span>
