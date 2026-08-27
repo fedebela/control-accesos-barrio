@@ -2,6 +2,7 @@
 
 import { useActionState, useState, useRef, useEffect, useCallback } from "react";
 import { searchPersona, registrarMovimiento, type ResultadoBusqueda, type EstadoAutorizacion } from "@/app/actions";
+import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
 
 // ---------------------------------------------------------------- PhotoInput
 
@@ -122,6 +123,8 @@ export default function HomePage() {
   const [manualMode, setManualMode] = useState(false);
   const [motivoManual, setMotivoManual] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [escaneado, setEscaneado] = useState<DniEscaneado | null>(null);
+  const [errorScan, setErrorScan] = useState<string | null>(null);
   const [estado, action, pending] = useActionState(registrarMovimiento, null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -135,6 +138,8 @@ export default function HomePage() {
     setResultado(null);
     setManualMode(false);
     setMotivoManual("");
+    setEscaneado(null);
+    setErrorScan(null);
     setForm({ ...FORM_VACIO });
     if (scanRef.current) { scanRef.current.value = ""; scanRef.current.focus(); }
   }, []);
@@ -148,17 +153,20 @@ export default function HomePage() {
     }
   }, [estado, limpiarTodo]);
 
-  // ---- Escaneo de DNI (PDF417 argentino: campos separados por coma) ----
-  const parseDni = (texto: string): string | null => {
-    for (const parte of texto.split(/[,@]/)) {
-      const limpio = parte.trim().replace(/\D/g, "");
-      if (/^\d{7,9}$/.test(limpio)) return limpio;
+  // ---- Escaneo del PDF417 del DNI ----
+  const alEscanear = (crudo: string) => {
+    const datos = parseDniEscaneado(crudo);
+    if (!datos) {
+      setEscaneado(null);
+      setErrorScan("No se pudo leer el código del DNI. Probá de nuevo o ingresá el número a mano.");
+      return;
     }
-    const m = texto.match(/\b\d{7,9}\b/);
-    return m ? m[0] : null;
+    setErrorScan(null);
+    setEscaneado(datos);
+    buscar(datos.dni, datos);
   };
 
-  const buscar = async (dni: string) => {
+  const buscar = async (dni: string, datos?: DniEscaneado | null) => {
     const limpio = dni.trim();
     if (!limpio) return;
 
@@ -170,7 +178,19 @@ export default function HomePage() {
     setDniInput(limpio);
 
     if (!r.persona) {
-      setForm({ ...FORM_VACIO, dni: limpio });
+      // Si el escaneo trajo nombre y apellido, abrimos la carga manual
+      // ya completada: solo falta la foto y el lote.
+      if (datos?.completo) {
+        setManualMode(true);
+        setForm({
+          ...FORM_VACIO,
+          dni: datos.dni,
+          nombre: datos.nombre,
+          apellido: datos.apellido,
+        });
+      } else {
+        setForm({ ...FORM_VACIO, dni: limpio });
+      }
       return;
     }
 
@@ -230,17 +250,23 @@ export default function HomePage() {
               ref={scanRef}
               type="text"
               placeholder="Escanear el código del DNI…"
+              autoComplete="off"
               onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
+                // El lector emula teclado y cierra con Enter (algunos con Tab).
+                if (e.key !== "Enter" && e.key !== "Tab") return;
                 e.preventDefault();
                 const el = e.target as HTMLInputElement;
-                const dni = parseDni(el.value);
+                const crudo = el.value;
                 el.value = "";
-                if (dni) buscar(dni);
+                if (crudo.trim()) alEscanear(crudo);
               }}
               style={styles.scanInput}
             />
           </div>
+
+          {errorScan && <div style={styles.error}>{errorScan}</div>}
+
+          {escaneado && <PanelEscaneo datos={escaneado} />}
 
           <div>
             <label style={styles.label}>Ingresar DNI</label>
@@ -435,6 +461,46 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Datos leidos del codigo del DNI, con aviso de vencimiento. */
+function PanelEscaneo({ datos }: { datos: DniEscaneado }) {
+  const edad = calcularEdad(datos.fechaNacimiento);
+
+  if (!datos.completo) {
+    return (
+      <div style={styles.scanPanel}>
+        <div style={styles.scanTitle}>Lectura parcial del DNI</div>
+        <p style={styles.scanTexto}>
+          Se pudo leer el número <strong>{datos.dni}</strong>, pero no el resto de los datos.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...styles.scanPanel, ...(datos.vencido ? styles.scanPanelVencido : null) }}>
+      <div style={styles.scanTitle}>Datos leídos del DNI</div>
+
+      <div style={styles.scanGrid}>
+        <span><strong>{datos.apellido}, {datos.nombre}</strong></span>
+        <span>DNI {datos.dni}</span>
+        {datos.sexo && <span>Sexo {datos.sexo}</span>}
+        {datos.ejemplar && <span>Ejemplar {datos.ejemplar}</span>}
+        {datos.fechaNacimiento && (
+          <span>Nac. {formatearFecha(datos.fechaNacimiento)}{edad !== null ? ` (${edad} años)` : ""}</span>
+        )}
+        {datos.fechaDocumento && <span>Fecha doc. {formatearFecha(datos.fechaDocumento)}</span>}
+      </div>
+
+      {datos.vencido && (
+        <p style={styles.scanAviso}>
+          ⚠ El documento figura con fecha {formatearFecha(datos.fechaDocumento)}, anterior a hoy.
+          Verificá la vigencia del DNI antes de autorizar el ingreso.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CamposEditables({
   form, setField, labelLote,
 }: {
@@ -564,6 +630,13 @@ const styles: Record<string, React.CSSProperties> = {
   searchBtn: { padding: "0.85rem 1.25rem", borderRadius: "0.75rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
   clearBtn: { padding: "0.85rem 1rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", background: "#f8fafc", color: "#475569", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
   checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" },
+
+  scanPanel: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.75rem", padding: "0.75rem 0.9rem" },
+  scanPanelVencido: { background: "#fffbeb", border: "1px solid #fcd34d" },
+  scanTitle: { fontSize: "0.78rem", fontWeight: 800, color: "#1e40af", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "0.4rem" },
+  scanGrid: { display: "flex", flexWrap: "wrap", gap: "0.35rem 1rem", fontSize: "0.9rem", color: "#1e293b" },
+  scanTexto: { fontSize: "0.9rem", color: "#334155", margin: 0 },
+  scanAviso: { fontSize: "0.88rem", color: "#92400e", fontWeight: 700, marginTop: "0.6rem", marginBottom: 0, lineHeight: 1.45 },
 
   previewCard: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1rem", border: "1px solid #e2e8f0" },
   previewTitle: { margin: "0 0 0.6rem", fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" },
