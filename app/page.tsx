@@ -1,12 +1,9 @@
 "use client";
 
-import { useActionState, useState, useRef, useEffect } from "react";
-import { searchPersona, registrarMovimiento, checkDniCargadoReciente } from "@/app/actions";
+import { useActionState, useState, useRef, useEffect, useCallback } from "react";
+import { searchPersona, registrarMovimiento, type ResultadoBusqueda, type EstadoAutorizacion } from "@/app/actions";
 
-type SearchPersonaResult = {
-  autorizado: any;
-  ultimoRegistro: any;
-} | null;
+// ---------------------------------------------------------------- PhotoInput
 
 function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -66,17 +63,17 @@ function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: s
     <div style={{ marginBottom: "0.75rem" }}>
       <label style={styles.label}>{label}</label>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", marginTop: "0.25rem" }}>
-        <button type="button" onClick={() => fileRef.current?.click()} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" }}>Seleccionar archivo</button>
-        <button type="button" onClick={startCamera} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" }}>Usar cámara</button>
-        {value && <button type="button" onClick={() => onChange("")} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", cursor: "pointer" }}>Quitar</button>}
+        <button type="button" onClick={() => fileRef.current?.click()} style={styles.miniBtn}>Seleccionar archivo</button>
+        <button type="button" onClick={startCamera} style={styles.miniBtn}>Usar cámara</button>
+        {value && <button type="button" onClick={() => onChange("")} style={styles.miniBtnDanger}>Quitar</button>}
       </div>
       <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
       {cameraMode && (
         <div style={{ marginBottom: "0.5rem" }}>
-          <video ref={videoRef} autoPlay playsInline style={{ width: 100, height: 100, borderRadius: "0.5rem", border: "1px solid #d1d5db", objectFit: "cover" }} />
+          <video ref={videoRef} autoPlay playsInline style={{ width: 120, height: 120, borderRadius: "0.5rem", border: "1px solid #d1d5db", objectFit: "cover" }} />
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-            <button type="button" onClick={capture} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "none", background: "#16a34a", color: "#fff", cursor: "pointer" }}>Capturar</button>
-            <button type="button" onClick={stopCamera} style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", borderRadius: "0.5rem", border: "none", background: "#94a3b8", color: "#fff", cursor: "pointer" }}>Cancelar</button>
+            <button type="button" onClick={capture} style={{ ...styles.miniBtn, background: "#16a34a", color: "#fff", border: "none" }}>Capturar</button>
+            <button type="button" onClick={stopCamera} style={{ ...styles.miniBtn, background: "#94a3b8", color: "#fff", border: "none" }}>Cancelar</button>
           </div>
         </div>
       )}
@@ -87,146 +84,125 @@ function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: s
   );
 }
 
+// ---------------------------------------------------------------- Badge
+
+const BADGES: Record<EstadoAutorizacion, { text: string; color: string; bg: string }> = {
+  residente:     { text: "RESIDENTE",                            color: "#166534", bg: "#dcfce7" },
+  permanente:    { text: "AUTORIZADO PERMANENTE",                color: "#166534", bg: "#dcfce7" },
+  temporal:      { text: "AUTORIZADO TEMPORAL",                  color: "#166534", bg: "#dcfce7" },
+  pendiente:     { text: "AUTORIZACIÓN PENDIENTE",               color: "#92400e", bg: "#fef3c7" },
+  usada:         { text: "NO AUTORIZADO · invitación ya usada",  color: "#991b1b", bg: "#fee2e2" },
+  vencida:       { text: "NO AUTORIZADO · invitación vencida",   color: "#991b1b", bg: "#fee2e2" },
+  previo:        { text: "NO AUTORIZADO · con registro previo",  color: "#991b1b", bg: "#fee2e2" },
+  no_registrado: { text: "NO REGISTRADO",                        color: "#991b1b", bg: "#fee2e2" },
+};
+
+function Badge({ estado }: { estado: EstadoAutorizacion }) {
+  const b = BADGES[estado];
+  return (
+    <div style={{ display: "inline-block", padding: "0.35rem 0.8rem", borderRadius: "999px", background: b.bg, color: b.color, fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.6rem" }}>
+      {b.text}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Página
+
+const FORM_VACIO = {
+  nombre: "", apellido: "", dni: "", tipo: "visita",
+  lote: "", patente: "", vehiculo: "", residenteNombre: "",
+  observaciones: "", fotoUrl: "",
+};
+
 export default function HomePage() {
   const [mode, setMode] = useState<"entrada" | "salida">("entrada");
   const [dniInput, setDniInput] = useState("");
-  const [searchResult, setSearchResult] = useState<SearchPersonaResult>(null);
+  const [resultado, setResultado] = useState<ResultadoBusqueda | null>(null);
   const [searching, setSearching] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [motivoManual, setMotivoManual] = useState("");
-  const [manualState, manualAction, manualPending] = useActionState(registrarMovimiento, null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [estado, action, pending] = useActionState(registrarMovimiento, null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
-  const [formNombre, setFormNombre] = useState("");
-  const [formApellido, setFormApellido] = useState("");
-  const [formDni, setFormDni] = useState("");
-  const [formTipo, setFormTipo] = useState("visita");
-  const [formLote, setFormLote] = useState("");
-  const [formPatente, setFormPatente] = useState("");
-  const [formVehiculo, setFormVehiculo] = useState("");
-  const [formResidenteNombre, setFormResidenteNombre] = useState("");
-  const [formObservaciones, setFormObservaciones] = useState("");
-  const [formFotoUrl, setFormFotoUrl] = useState("");
+  const [form, setForm] = useState({ ...FORM_VACIO });
+  const setField = (k: keyof typeof FORM_VACIO, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const limpiarTodo = useCallback(() => {
+    setDniInput("");
+    setResultado(null);
+    setManualMode(false);
+    setMotivoManual("");
+    setForm({ ...FORM_VACIO });
+    if (scanRef.current) { scanRef.current.value = ""; scanRef.current.focus(); }
+  }, []);
+
+  useEffect(() => { if (scanRef.current) scanRef.current.focus(); }, [mode]);
 
   useEffect(() => {
-    if (scanRef.current) scanRef.current.focus();
-  }, [mode]);
-
-  useEffect(() => {
-    if (manualState?.success) {
-      setDniInput("");
-      setSearchResult(null);
-      setManualMode(false);
-      setMotivoManual("");
-      setFormNombre("");
-      setFormApellido("");
-      setFormDni("");
-      setFormTipo("visita");
-      setFormLote("");
-      setFormPatente("");
-      setFormVehiculo("");
-      setFormResidenteNombre("");
-      setFormObservaciones("");
-      setFormFotoUrl("");
+    if (estado?.success) {
+      limpiarTodo();
+      setRefreshKey((k) => k + 1);
     }
-  }, [manualState]);
+  }, [estado, limpiarTodo]);
 
-  const parseDniFromScan = (text: string): string | null => {
-    const parts = text.split(",");
-    for (const part of parts) {
-      const cleaned = part.trim();
-      if (/^\d{7,9}$/.test(cleaned)) return cleaned;
+  // ---- Escaneo de DNI (PDF417 argentino: campos separados por coma) ----
+  const parseDni = (texto: string): string | null => {
+    for (const parte of texto.split(/[,@]/)) {
+      const limpio = parte.trim().replace(/\D/g, "");
+      if (/^\d{7,9}$/.test(limpio)) return limpio;
     }
-    const match = text.match(/\b\d{7,9}\b/);
-    return match ? match[0] : null;
+    const m = texto.match(/\b\d{7,9}\b/);
+    return m ? m[0] : null;
   };
 
-  const handleScan = async (value: string) => {
-    const dni = parseDniFromScan(value);
-    if (dni) {
-      setDniInput(dni);
-      await doSearch(dni);
-    }
-  };
+  const buscar = async (dni: string) => {
+    const limpio = dni.trim();
+    if (!limpio) return;
 
-  const handleSearch = async () => {
-    if (dniInput.trim()) await doSearch(dniInput.trim());
-  };
-
-  const doSearch = async (dni: string) => {
     setSearching(true);
     setManualMode(false);
-    const result = await searchPersona(dni);
-    setSearchResult(result);
+    const r = await searchPersona(limpio);
+    setResultado(r);
     setSearching(false);
+    setDniInput(limpio);
 
-    if (result?.autorizado) {
-      const a = result.autorizado;
-      const last = result.ultimoRegistro;
-      setFormNombre(a.nombre || "");
-      setFormApellido(a.apellido || "");
-      setFormDni(a.dni || "");
-      setFormFotoUrl(a.foto_url || last?.foto_url || "");
-      setFormResidenteNombre(a.residente_nombre || "");
-      if (mode === "salida" && last) {
-        setFormTipo(last.tipo || a.tipo || "visita");
-        setFormLote(last.lote_destino || a.lote || "");
-        setFormPatente(last.patente || a.patente || "");
-        setFormVehiculo(last.vehiculo_tipo === "sin_vehiculo" ? "no" : last.vehiculo_tipo ? "si" : "");
-        setFormObservaciones(last.observaciones || "");
-      } else if (last) {
-        setFormTipo(a.tipo || "visita");
-        setFormLote(a.lote || "");
-        setFormPatente(last.patente || a.patente || "");
-        setFormVehiculo(last.vehiculo_tipo === "sin_vehiculo" ? "no" : last.vehiculo_tipo ? "si" : (a.patente ? "si" : ""));
-        setFormObservaciones("");
-      } else {
-        setFormTipo(a.tipo || "visita");
-        setFormLote(a.lote || "");
-        setFormPatente(a.patente || "");
-        setFormVehiculo(a.patente ? "si" : "");
-        setFormObservaciones("");
-      }
+    if (!r.persona) {
+      setForm({ ...FORM_VACIO, dni: limpio });
+      return;
     }
+
+    // En salida se prellenan los datos de la ULTIMA ENTRADA.
+    // En entrada se usan los datos del maestro + ultimo movimiento.
+    const base = mode === "salida" ? r.ultimaEntrada : r.ultimoRegistro;
+
+    setForm({
+      nombre: r.persona.nombre,
+      apellido: r.persona.apellido,
+      dni: r.persona.dni,
+      tipo: r.persona.tipo || "visita",
+      lote: base?.lote_destino || r.persona.lote || "",
+      patente: base?.patente || r.persona.patente || "",
+      vehiculo: base?.vehiculo_tipo === "si" || base?.patente ? "si" : r.persona.patente ? "si" : "no",
+      residenteNombre: r.persona.residente_nombre || "",
+      observaciones: mode === "salida" ? base?.observaciones || "" : "",
+      fotoUrl: r.persona.foto_url || base?.foto_url || "",
+    });
   };
 
-  function getPreviewFoto() {
-    if (searchResult?.autorizado?.foto_url) return searchResult.autorizado.foto_url;
-    if (searchResult?.ultimoRegistro?.foto_url) return searchResult.ultimoRegistro.foto_url;
-    return null;
-  }
+  const activarManual = (checked: boolean) => {
+    setManualMode(checked);
+    setResultado(null);
+    setMotivoManual("");
+    setForm({ ...FORM_VACIO, dni: checked ? dniInput.trim() : "" });
+  };
 
-  function getPreviewBadge() {
-    if (!searchResult?.autorizado) return null;
-    const a = searchResult.autorizado;
-
-    if (a.es_residente) return { text: "RESIDENTE", color: "#166534", bg: "#dcfce7" };
-
-    if (a.tipo === "permanente" && a.autorizado) {
-      return { text: "AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
-    }
-
-    if (a.es_invitacion && a.invitacion_aprobada && !a.invitacion_usada) {
-      return { text: "AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
-    }
-
-    if (a.es_invitacion && !a.invitacion_aprobada) {
-      return { text: "AUTORIZACIÓN PENDIENTE", color: "#92400e", bg: "#fef3c7" };
-    }
-
-    if (a.es_registro_previo && !a.autorizado) {
-      return { text: "NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
-    }
-
-    if (!a.autorizado) {
-      return { text: "NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
-    }
-
-    return { text: "AUTORIZADO", color: "#166534", bg: "#dcfce7" };
-  }
-
-  const isAuthorized = searchResult?.autorizado?.autorizado || searchResult?.autorizado?.es_residente;
+  const labelLote = mode === "salida" ? "Lote desde donde se retira *" : "Lote que autoriza el ingreso *";
+  const textoBoton = mode === "entrada" ? "Registrar Entrada" : "Registrar Salida";
+  const hayPersona = Boolean(resultado?.persona);
+  const noRegistrado = Boolean(resultado && !resultado.persona);
 
   return (
     <div style={styles.container}>
@@ -239,297 +215,185 @@ export default function HomePage() {
       </header>
 
       <div style={styles.modeToggle}>
-        <button
-          onClick={() => setMode("entrada")}
-          style={mode === "entrada" ? styles.modeActive : styles.modeInactive}
-        >
-          ENTRADA
-        </button>
-        <button
-          onClick={() => setMode("salida")}
-          style={mode === "salida" ? styles.modeActive : styles.modeInactive}
-        >
-          SALIDA
-        </button>
+        <button onClick={() => { setMode("entrada"); limpiarTodo(); }} style={mode === "entrada" ? styles.modeActive : styles.modeInactive}>ENTRADA</button>
+        <button onClick={() => { setMode("salida"); limpiarTodo(); }} style={mode === "salida" ? styles.modeActiveExit : styles.modeInactive}>SALIDA</button>
       </div>
 
       <div style={styles.card}>
-        <h2 style={styles.cardTitle}>
-          {mode === "entrada" ? "Registrar Entrada" : "Registrar Salida"}
-        </h2>
+        <h2 style={styles.cardTitle}>{mode === "entrada" ? "Registrar Entrada" : "Registrar Salida"}</h2>
 
+        {/* ---------------- Bloque de busqueda (siempre visible) ---------------- */}
         <div style={styles.inputGroup}>
-          <label style={styles.label}>Escanear DNI</label>
-          <div style={styles.scanRow}>
+          <div>
+            <label style={styles.label}>Escanear DNI</label>
             <input
               ref={scanRef}
               type="text"
-              placeholder="Escanear DNI aquí..."
+              placeholder="Escanear el código del DNI…"
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const target = e.target as HTMLInputElement;
-                  handleScan(target.value);
-                  target.value = "";
-                }
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                const el = e.target as HTMLInputElement;
+                const dni = parseDni(el.value);
+                el.value = "";
+                if (dni) buscar(dni);
               }}
               style={styles.scanInput}
             />
           </div>
 
-          <label style={styles.label}>Ingresar DNI</label>
-          <div style={styles.searchRow}>
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Ingresar DNI..."
-              value={dniInput}
-              onChange={(e) => setDniInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
-              style={styles.searchInput}
-            />
-            <button onClick={handleSearch} style={styles.searchBtn} disabled={searching}>
-              {searching ? "Buscando..." : "Buscar"}
-            </button>
+          <div>
+            <label style={styles.label}>Ingresar DNI</label>
+            <div style={styles.searchRow}>
+              <input
+                ref={inputRef}
+                type="text"
+                inputMode="numeric"
+                placeholder="Número de DNI…"
+                value={dniInput}
+                onChange={(e) => setDniInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); buscar(dniInput); } }}
+                style={styles.searchInput}
+              />
+              <button type="button" onClick={() => buscar(dniInput)} style={styles.searchBtn} disabled={searching || !dniInput.trim()}>
+                {searching ? "Buscando…" : "Buscar"}
+              </button>
+              {(resultado || manualMode) && (
+                <button type="button" onClick={limpiarTodo} style={styles.clearBtn}>Limpiar</button>
+              )}
+            </div>
           </div>
 
-          {mode === "entrada" && (
-            <div style={styles.checkboxRow}>
-              <label style={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={manualMode}
-                  onChange={(e) => {
-                    setManualMode(e.target.checked);
-                    if (e.target.checked) {
-                      setSearchResult(null);
-                      setFormNombre("");
-                      setFormApellido("");
-                      setFormDni("");
-                      setFormTipo("visita");
-                      setFormLote("");
-                      setFormPatente("");
-                      setFormVehiculo("");
-                      setFormResidenteNombre("");
-                      setFormObservaciones("");
-                      setFormFotoUrl("");
-                    }
-                  }}
-                />
-                Carga manual (requiere motivo)
-              </label>
-            </div>
-          )}
+          <label style={styles.checkboxLabel}>
+            <input type="checkbox" checked={manualMode} onChange={(e) => activarManual(e.target.checked)} />
+            Carga manual — persona sin registro previo (requiere motivo)
+          </label>
         </div>
 
-        {searchResult && !searchResult.autorizado && (
+        {/* ---------------- DNI sin ningun dato ---------------- */}
+        {noRegistrado && !manualMode && (
           <div style={styles.previewCard}>
             <h3 style={styles.previewTitle}>Preview</h3>
-            <div style={styles.previewSection}>
-              <div style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: "999px", background: "#fee2e2", color: "#991b1b", fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                NO AUTORIZADO
-              </div>
-              {getPreviewFoto() ? (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  <img
-                    src={getPreviewFoto()!}
-                    alt={`${searchResult.autorizado?.nombre} ${searchResult.autorizado?.apellido}`}
-                    style={{ width: 80, height: 80, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #fecaca" }}
-                  />
-                </div>
-              ) : (
-                <div style={{ marginBottom: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem" }}>
-                  Esta persona no tiene foto cargada
-                </div>
-              )}
-              {searchResult.autorizado && (
-                <>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Nombre:</span>
-                    <span>{searchResult.autorizado.nombre} {searchResult.autorizado.apellido}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>DNI:</span>
-                    <span>{searchResult.autorizado.dni}</span>
-                  </div>
-                </>
-              )}
-              {searchResult.ultimoRegistro && (
-                <div style={styles.previewSection}>
-                  <h4 style={styles.previewSubtitle}>Último registro</h4>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Fecha:</span>
-                    <span>{new Date(searchResult.ultimoRegistro.fecha_hora).toLocaleString("es-AR")}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Lote:</span>
-                    <span>{searchResult.ultimoRegistro.lote_destino}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Tipo:</span>
-                    <span>{searchResult.ultimoRegistro.es_entrada ? "Entrada" : "Salida"}</span>
-                  </div>
-                </div>
-              )}
-              <p style={{ ...styles.previewText, color: "#dc2626", fontWeight: 600, marginTop: "0.5rem" }}>
-                Esta persona no está autorizada. Use carga manual si desea registrar su ingreso.
-              </p>
-            </div>
+            <Badge estado="no_registrado" />
+            <p style={styles.previewDanger}>
+              El DNI {dniInput} no figura en el sistema y no tiene ingresos previos.
+              Tildá <strong>Carga manual</strong> para registrarlo por primera vez.
+            </p>
           </div>
         )}
 
-        {searchResult && searchResult.autorizado && !manualMode && (
-          <form action={manualAction} style={styles.form}>
+        {/* ---------------- Persona encontrada ---------------- */}
+        {hayPersona && !manualMode && resultado && (
+          <form action={action} style={styles.form}>
             <input type="hidden" name="es_entrada" value={mode === "entrada" ? "true" : "false"} />
             <input type="hidden" name="es_manual" value="false" />
             <input type="hidden" name="motivo_manual" value="" />
-            <input type="hidden" name="foto_url" value={formFotoUrl} />
-            <input type="hidden" name="nombre" value={formNombre} />
-            <input type="hidden" name="apellido" value={formApellido} />
-            <input type="hidden" name="dni" value={formDni} />
-            <input type="hidden" name="tipo" value={formTipo} />
-            <input type="hidden" name="lote_destino" value={formLote} />
-            <input type="hidden" name="residente_nombre" value={formResidenteNombre} />
-            <input type="hidden" name="patente" value={formPatente} />
-            <input type="hidden" name="vehiculo_tipo" value={formVehiculo} />
-            <input type="hidden" name="observaciones" value={formObservaciones} />
-            <input type="hidden" name="autorizado_por" value={formLote} />
+            <input type="hidden" name="nombre" value={form.nombre} />
+            <input type="hidden" name="apellido" value={form.apellido} />
+            <input type="hidden" name="dni" value={form.dni} />
+            <input type="hidden" name="tipo" value={form.tipo} />
+            <input type="hidden" name="residente_nombre" value={form.residenteNombre} />
+            <input type="hidden" name="foto_url" value={form.fotoUrl} />
 
             <div style={styles.previewCard}>
-              <div style={styles.previewSection}>
-                {getPreviewBadge() && (
-                  <div style={{ display: "inline-block", padding: "0.3rem 0.7rem", borderRadius: "999px", background: getPreviewBadge()!.bg, color: getPreviewBadge()!.color, fontWeight: 700, fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-                    {getPreviewBadge()!.text}
-                  </div>
-                )}
-                {getPreviewFoto() ? (
-                  <div style={{ marginBottom: "0.5rem" }}>
-                    <img
-                      src={getPreviewFoto()!}
-                      alt={`${formNombre} ${formApellido}`}
-                      style={{ width: 80, height: 80, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0" }}
-                    />
-                  </div>
-                ) : (
-                  <div style={{ marginBottom: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem" }}>
-                    Esta persona no tiene foto cargada
-                  </div>
-                )}
-                <div style={styles.previewRow}>
-                  <span style={styles.previewLabel}>Nombre:</span>
-                  <span>{formNombre} {formApellido}</span>
-                </div>
-                <div style={styles.previewRow}>
-                  <span style={styles.previewLabel}>DNI:</span>
-                  <span>{formDni}</span>
-                </div>
-                <div style={styles.previewRow}>
-                  <span style={styles.previewLabel}>Tipo:</span>
-                  <span>{formTipo}</span>
-                </div>
-                <div style={styles.previewRow}>
-                  <span style={styles.previewLabel}>Observaciones:</span>
-                  <span>{formObservaciones || "-"}</span>
-                </div>
-              </div>
+              <h3 style={styles.previewTitle}>Preview</h3>
+              <Badge estado={resultado.estado} />
 
-              {searchResult.ultimoRegistro && (
-                <div style={styles.previewSection}>
-                  <h4 style={styles.previewSubtitle}>Último registro</h4>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Fecha:</span>
-                    <span>{new Date(searchResult.ultimoRegistro.fecha_hora).toLocaleString("es-AR")}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Patente:</span>
-                    <span>{searchResult.ultimoRegistro.patente || "-"}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Lote:</span>
-                    <span>{searchResult.ultimoRegistro.lote_destino}</span>
-                  </div>
-                  <div style={styles.previewRow}>
-                    <span style={styles.previewLabel}>Tipo:</span>
-                    <span>{searchResult.ultimoRegistro.es_entrada ? "Entrada" : "Salida"}</span>
-                  </div>
+              {form.fotoUrl ? (
+                <img src={form.fotoUrl} alt={`${form.nombre} ${form.apellido}`} style={styles.previewFoto} />
+              ) : (
+                <div style={styles.previewDangerBox}>Esta persona no tiene foto cargada</div>
+              )}
+
+              <Row label="Nombre" value={form.nombre} />
+              <Row label="Apellido" value={form.apellido} />
+              <Row label="DNI" value={form.dni} />
+              <Row label="Tipo" value={form.tipo} />
+              <Row label="Observaciones" value={resultado.persona!.observaciones || "—"} />
+
+              {resultado.estado === "pendiente" && (
+                <p style={styles.previewWarn}>
+                  La invitación existe pero el residente todavía no la confirmó.
+                </p>
+              )}
+              {!resultado.autorizado && resultado.estado !== "pendiente" && (
+                <p style={styles.previewDanger}>
+                  Sin autorización vigente. Comunicarse con el residente antes de permitir el ingreso.
+                </p>
+              )}
+
+              {(mode === "salida" ? resultado.ultimaEntrada : resultado.ultimoRegistro) && (
+                <div style={styles.previewSub}>
+                  <h4 style={styles.previewSubtitle}>
+                    {mode === "salida" ? "Última entrada" : "Último registro"}
+                  </h4>
+                  {(() => {
+                    const r = (mode === "salida" ? resultado.ultimaEntrada : resultado.ultimoRegistro)!;
+                    return (
+                      <>
+                        <Row label="Fecha" value={new Date(r.fecha_hora).toLocaleString("es-AR")} />
+                        <Row label="Patente" value={r.patente || "—"} />
+                        <Row label="Lote" value={r.lote_destino || "—"} />
+                        <Row label="Movimiento" value={r.es_entrada ? "Entrada" : "Salida"} />
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
 
-            <div style={styles.field}>
-              <label style={styles.label}>{mode === "salida" ? "Lote donde se retira" : "Lote donde se autoriza"}</label>
-              <input
-                type="text"
-                value={formLote}
-                onChange={(e) => setFormLote(e.target.value)}
-                style={styles.input}
-                placeholder="Ingresar lote"
-              />
-            </div>
+            <CamposEditables
+              form={form}
+              setField={setField}
+              labelLote={labelLote}
+            />
 
-            <div style={styles.field}>
-              <label style={styles.label}>Patente</label>
-              <input
-                type="text"
-                value={formPatente}
-                onChange={(e) => setFormPatente(e.target.value)}
-                style={styles.input}
-                placeholder="Ingresar patente"
-              />
-            </div>
+            {estado?.error && <div style={styles.error}>{estado.error}</div>}
+            {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            {manualState?.error && <div style={styles.error}>{manualState.error}</div>}
-            {manualState?.success && <div style={styles.success}>{manualState.message}</div>}
-
-            <button type="submit" style={styles.submitBtn} disabled={manualPending}>
-              {manualPending ? "Procesando..." : mode === "entrada" ? "Registrar Entrada" : "Registrar Salida"}
+            <button type="submit" style={mode === "entrada" ? styles.submitBtn : styles.submitBtnExit} disabled={pending}>
+              {pending ? "Procesando…" : textoBoton}
             </button>
           </form>
         )}
 
+        {/* ---------------- Carga manual ---------------- */}
         {manualMode && (
-          <form action={manualAction} style={styles.form}>
-            <input type="hidden" name="es_entrada" value="true" />
+          <form action={action} style={styles.form}>
+            <input type="hidden" name="es_entrada" value={mode === "entrada" ? "true" : "false"} />
             <input type="hidden" name="es_manual" value="true" />
-            <input type="hidden" name="foto_url" value={formFotoUrl} />
+            <input type="hidden" name="foto_url" value={form.fotoUrl} />
 
-            <PhotoInput value={formFotoUrl} onChange={setFormFotoUrl} label="Foto de la persona (opcional)" />
+            <PhotoInput value={form.fotoUrl} onChange={(v) => setField("fotoUrl", v)} label="Foto de la persona" />
 
-            <div style={styles.field}>
-              <label style={styles.label}>Nombre *</label>
-              <input name="nombre" type="text" required style={styles.input} />
+            <div style={styles.formRow}>
+              <div style={styles.field}>
+                <label style={styles.label}>Nombre *</label>
+                <input name="nombre" required value={form.nombre} onChange={(e) => setField("nombre", e.target.value)} style={styles.input} />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Apellido *</label>
+                <input name="apellido" required value={form.apellido} onChange={(e) => setField("apellido", e.target.value)} style={styles.input} />
+              </div>
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Apellido *</label>
-              <input name="apellido" type="text" required style={styles.input} />
+
+            <div style={styles.formRow}>
+              <div style={styles.field}>
+                <label style={styles.label}>DNI *</label>
+                <input name="dni" required inputMode="numeric" value={form.dni} onChange={(e) => setField("dni", e.target.value)} style={styles.input} />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Tipo</label>
+                <select name="tipo" value={form.tipo} onChange={(e) => setField("tipo", e.target.value)} style={styles.input}>
+                  <option value="visita">Visita</option>
+                  <option value="proveedor">Proveedor</option>
+                  <option value="servicio">Servicio</option>
+                </select>
+              </div>
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>DNI *</label>
-              <input name="dni" type="text" required style={styles.input} />
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Tipo</label>
-              <select name="tipo" style={styles.input}>
-                <option value="visita">Visita</option>
-                <option value="proveedor">Proveedor</option>
-                <option value="servicio">Servicio</option>
-              </select>
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Tiene vehículo</label>
-              <select name="vehiculo_tipo" style={styles.input}>
-                <option value="">Seleccionar...</option>
-                <option value="si">Sí</option>
-                <option value="no">No</option>
-              </select>
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Observaciones</label>
-              <input name="observaciones" type="text" style={styles.input} />
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>{mode === "salida" ? "Lote donde se retira" : "Lote donde se autoriza"}</label>
-              <input name="autorizado_por" type="text" style={styles.input} placeholder="Lote del residente" required />
-            </div>
+
+            <CamposEditables form={form} setField={setField} labelLote={labelLote} />
+
             <div style={styles.field}>
               <label style={styles.label}>Motivo de carga manual *</label>
               <textarea
@@ -537,38 +401,115 @@ export default function HomePage() {
                 name="motivo_manual"
                 value={motivoManual}
                 onChange={(e) => setMotivoManual(e.target.value.slice(0, 200))}
-                placeholder="Describí el motivo..."
-                style={styles.input}
+                placeholder="Ej: primera vez que ingresa, DNI dañado, lector fuera de servicio…"
+                style={{ ...styles.input, resize: "vertical" }}
                 rows={2}
                 maxLength={200}
               />
-              <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>{motivoManual.length}/200</span>
+              <span style={styles.counter}>{motivoManual.length}/200</span>
             </div>
 
-            {manualState?.error && <div style={styles.error}>{manualState.error}</div>}
-            {manualState?.success && <div style={styles.success}>{manualState.message}</div>}
+            {estado?.error && <div style={styles.error}>{estado.error}</div>}
+            {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            <button type="submit" style={styles.submitBtn} disabled={manualPending}>
-              {manualPending ? "Procesando..." : "Registrar Entrada (Manual)"}
+            <button type="submit" style={mode === "entrada" ? styles.submitBtn : styles.submitBtnExit} disabled={pending}>
+              {pending ? "Procesando…" : `${textoBoton} (manual)`}
             </button>
           </form>
         )}
       </div>
 
-      <RecentRecords />
+      <RecentRecords refreshKey={refreshKey} />
     </div>
   );
 }
 
-function RecentRecords() {
+// ---------------------------------------------------------------- Subcomponentes
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styles.previewRow}>
+      <span style={styles.previewLabel}>{label}:</span>
+      <span style={{ textAlign: "right" }}>{value || "—"}</span>
+    </div>
+  );
+}
+
+function CamposEditables({
+  form, setField, labelLote,
+}: {
+  form: typeof FORM_VACIO;
+  setField: (k: keyof typeof FORM_VACIO, v: string) => void;
+  labelLote: string;
+}) {
+  return (
+    <>
+      <div style={styles.field}>
+        <label style={styles.label}>{labelLote}</label>
+        <input
+          name="lote_destino"
+          required
+          value={form.lote}
+          onChange={(e) => setField("lote", e.target.value)}
+          style={styles.input}
+          placeholder="Ej: 142"
+        />
+      </div>
+
+      <div style={styles.formRow}>
+        <div style={styles.field}>
+          <label style={styles.label}>Ingresa con vehículo</label>
+          <select
+            name="vehiculo_tipo"
+            value={form.vehiculo}
+            onChange={(e) => {
+              setField("vehiculo", e.target.value);
+              if (e.target.value === "no") setField("patente", "");
+            }}
+            style={styles.input}
+          >
+            <option value="">Seleccionar…</option>
+            <option value="si">Sí</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div style={styles.field}>
+          <label style={styles.label}>Patente {form.vehiculo === "si" ? "*" : ""}</label>
+          <input
+            name="patente"
+            value={form.patente}
+            onChange={(e) => setField("patente", e.target.value.toUpperCase())}
+            style={styles.input}
+            placeholder="Puede cambiar en cada ingreso"
+            disabled={form.vehiculo === "no"}
+          />
+        </div>
+      </div>
+
+      <div style={styles.field}>
+        <label style={styles.label}>Observaciones</label>
+        <input
+          name="observaciones"
+          value={form.observaciones}
+          onChange={(e) => setField("observaciones", e.target.value)}
+          style={styles.input}
+        />
+      </div>
+    </>
+  );
+}
+
+function RecentRecords({ refreshKey }: { refreshKey: number }) {
   const [records, setRecords] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch("/api/records")
+    let activo = true;
+    fetch("/api/records", { cache: "no-store" })
       .then((res) => res.json())
-      .then(setRecords)
+      .then((d) => { if (activo) setRecords(Array.isArray(d) ? d : []); })
       .catch(() => {});
-  }, []);
+    return () => { activo = false; };
+  }, [refreshKey]);
 
   return (
     <div style={styles.card}>
@@ -580,14 +521,14 @@ function RecentRecords() {
           {records.map((r: any) => (
             <div key={r.id} style={styles.recordRow}>
               <div style={styles.recordMain}>
-                <span style={r.es_entrada ? styles.badgeEntry : styles.badgeExit}>
-                  {r.es_entrada ? "ENT" : "SAL"}
-                </span>
+                <span style={r.es_entrada ? styles.badgeEntry : styles.badgeExit}>{r.es_entrada ? "ENT" : "SAL"}</span>
+                {r.foto_url && <img src={r.foto_url} alt="" style={{ width: 28, height: 28, borderRadius: "0.3rem", objectFit: "cover" }} />}
                 <span style={styles.recordName}>{r.nombre} {r.apellido}</span>
-                <span style={styles.recordDni}>DNI: {r.dni}</span>
+                <span style={styles.recordDni}>DNI {r.dni}</span>
+                {r.patente && <span style={styles.recordDni}>· {r.patente}</span>}
               </div>
               <div style={styles.recordMeta}>
-                <span>{r.lote_destino}</span>
+                <span>Lote {r.lote_destino || "—"}</span>
                 <span>{new Date(r.fecha_hora).toLocaleTimeString("es-AR")}</span>
               </div>
             </div>
@@ -598,43 +539,61 @@ function RecentRecords() {
   );
 }
 
+// ---------------------------------------------------------------- Estilos
+
 const styles: Record<string, React.CSSProperties> = {
   container: { maxWidth: 900, margin: "0 auto", padding: "1.5rem 1rem" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" },
   title: { fontSize: "1.75rem", fontWeight: 800, color: "#0f172a", margin: 0 },
   nav: { display: "flex", gap: "1rem" },
   navLink: { color: "#2563eb", textDecoration: "none", fontWeight: 600 },
+
   modeToggle: { display: "flex", gap: "0.5rem", marginBottom: "1.25rem" },
   modeActive: { flex: 1, padding: "0.9rem", border: "none", borderRadius: "0.75rem", background: "#16a34a", color: "#fff", fontWeight: 800, fontSize: "1rem", cursor: "pointer" },
+  modeActiveExit: { flex: 1, padding: "0.9rem", border: "none", borderRadius: "0.75rem", background: "#b91c1c", color: "#fff", fontWeight: 800, fontSize: "1rem", cursor: "pointer" },
   modeInactive: { flex: 1, padding: "0.9rem", border: "1px solid #d1d5db", borderRadius: "0.75rem", background: "#f8fafc", color: "#475569", fontWeight: 700, fontSize: "1rem", cursor: "pointer" },
+
   card: { background: "#fff", borderRadius: "1rem", padding: "1.5rem", marginBottom: "1.25rem", border: "1px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.05)" },
   cardTitle: { fontSize: "1.25rem", fontWeight: 800, margin: "0 0 1rem", color: "#0f172a" },
-  inputGroup: { display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1rem" },
-  label: { fontSize: "0.9rem", fontWeight: 700, color: "#374151" },
-  scanRow: { display: "flex", gap: "0.5rem" },
-  scanInput: { flex: 1, padding: "0.85rem", borderRadius: "0.75rem", border: "2px dashed #94a3b8", fontSize: "1rem", outline: "none" },
+
+  inputGroup: { display: "flex", flexDirection: "column", gap: "0.85rem", marginBottom: "1rem" },
+  label: { fontSize: "0.9rem", fontWeight: 700, color: "#374151", display: "block", marginBottom: "0.3rem" },
+  scanInput: { width: "100%", padding: "0.85rem", borderRadius: "0.75rem", border: "2px dashed #94a3b8", fontSize: "1rem", outline: "none", boxSizing: "border-box" },
   searchRow: { display: "flex", gap: "0.5rem" },
-  searchInput: { flex: 1, padding: "0.85rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none" },
-  searchBtn: { padding: "0.85rem 1.25rem", borderRadius: "0.75rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer" },
-  checkboxRow: { display: "flex", alignItems: "center", gap: "0.5rem" },
-  checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.4rem" },
+  searchInput: { flex: 1, padding: "0.85rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none", minWidth: 0 },
+  searchBtn: { padding: "0.85rem 1.25rem", borderRadius: "0.75rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  clearBtn: { padding: "0.85rem 1rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", background: "#f8fafc", color: "#475569", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" },
+
   previewCard: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1rem", border: "1px solid #e2e8f0" },
-  previewTitle: { margin: "0 0 0.75rem", fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" },
-  previewSection: { marginBottom: "0.75rem" },
-  previewRow: { display: "flex", justifyContent: "space-between", padding: "0.3rem 0", fontSize: "0.95rem" },
-  previewLabel: { fontWeight: 600, color: "#475569" },
-  previewSubtitle: { margin: "0.5rem 0 0.3rem", fontSize: "0.95rem", fontWeight: 700, color: "#334155" },
-  previewText: { fontSize: "0.9rem", color: "#64748b" },
+  previewTitle: { margin: "0 0 0.6rem", fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" },
+  previewFoto: { width: 90, height: 90, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0", display: "block", marginBottom: "0.6rem" },
+  previewRow: { display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.3rem 0", fontSize: "0.95rem" },
+  previewLabel: { fontWeight: 600, color: "#475569", whiteSpace: "nowrap" },
+  previewSub: { marginTop: "0.75rem", paddingTop: "0.6rem", borderTop: "1px solid #e2e8f0" },
+  previewSubtitle: { margin: "0 0 0.3rem", fontSize: "0.95rem", fontWeight: 700, color: "#334155" },
+  previewDanger: { fontSize: "0.9rem", color: "#dc2626", fontWeight: 600, marginTop: "0.5rem" },
+  previewWarn: { fontSize: "0.9rem", color: "#92400e", fontWeight: 600, marginTop: "0.5rem" },
+  previewDangerBox: { padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" },
+
   form: { display: "flex", flexDirection: "column", gap: "0.85rem" },
-  field: { display: "flex", flexDirection: "column", gap: "0.35rem" },
-  input: { padding: "0.8rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none" },
+  formRow: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
+  field: { display: "flex", flexDirection: "column", gap: "0.3rem", flex: 1, minWidth: 160 },
+  input: { padding: "0.8rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none", width: "100%", boxSizing: "border-box" },
+  counter: { fontSize: "0.8rem", color: "#94a3b8" },
+
+  miniBtn: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" },
+  miniBtnDanger: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", cursor: "pointer" },
+
   error: { padding: "0.75rem", borderRadius: "0.75rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600 },
   success: { padding: "0.75rem", borderRadius: "0.75rem", background: "#ecfdf5", color: "#059669", fontWeight: 600 },
   submitBtn: { padding: "0.95rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #16a34a, #22c55e)", color: "#fff", fontWeight: 800, fontSize: "1.05rem", cursor: "pointer" },
+  submitBtnExit: { padding: "0.95rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #b91c1c, #ef4444)", color: "#fff", fontWeight: 800, fontSize: "1.05rem", cursor: "pointer" },
+
   empty: { color: "#94a3b8", fontStyle: "italic" },
   recordsList: { display: "flex", flexDirection: "column", gap: "0.5rem" },
-  recordRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.6rem 0.75rem", borderRadius: "0.5rem", background: "#f8fafc", border: "1px solid #f1f5f9" },
-  recordMain: { display: "flex", alignItems: "center", gap: "0.5rem" },
+  recordRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.75rem", borderRadius: "0.5rem", background: "#f8fafc", border: "1px solid #f1f5f9", flexWrap: "wrap" },
+  recordMain: { display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" },
   badgeEntry: { padding: "0.15rem 0.4rem", borderRadius: "0.25rem", background: "#dcfce7", color: "#166534", fontWeight: 700, fontSize: "0.75rem" },
   badgeExit: { padding: "0.15rem 0.4rem", borderRadius: "0.25rem", background: "#fee2e2", color: "#991b1b", fontWeight: 700, fontSize: "0.75rem" },
   recordName: { fontWeight: 600, color: "#0f172a" },

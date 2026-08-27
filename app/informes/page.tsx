@@ -15,12 +15,14 @@ export default function InformesPage() {
 
   const fetchData = async () => {
     setLoading(true);
-    const data = await getRegistros(dni || undefined, dni || undefined);
-    if (dni) {
+    setError(null);
+    try {
+      // Si hay DNI, prevalece la busqueda por persona (ignora la fecha).
+      const data = await getRegistros(dni.trim() ? undefined : fecha, dni.trim() || undefined);
       setRecords(data);
-    } else {
-      const filtered = data.filter((r: any) => r.fecha_hora.startsWith(fecha));
-      setRecords(filtered);
+    } catch {
+      setError("No se pudieron obtener los registros.");
+      setRecords([]);
     }
     setLoading(false);
   };
@@ -127,7 +129,13 @@ export default function InformesPage() {
                         </td>
                         <td style={styles.td}><input value={editForm.dni} onChange={(e) => setEditForm({ ...editForm, dni: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }} /></td>
                         <td style={styles.td}><input value={editForm.lote_destino} onChange={(e) => setEditForm({ ...editForm, lote_destino: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }} /></td>
-                        <td style={styles.td}><input value={editForm.vehiculo_tipo} onChange={(e) => setEditForm({ ...editForm, vehiculo_tipo: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }} /></td>
+                        <td style={styles.td}>
+                          <select value={editForm.vehiculo_tipo} onChange={(e) => setEditForm({ ...editForm, vehiculo_tipo: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }}>
+                            <option value="">—</option>
+                            <option value="si">Sí</option>
+                            <option value="no">No</option>
+                          </select>
+                        </td>
                         <td style={styles.td}><input value={editForm.patente} onChange={(e) => setEditForm({ ...editForm, patente: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }} /></td>
                         <td style={styles.td}>
                           <div style={{ display: "flex", gap: "0.25rem" }}>
@@ -146,8 +154,8 @@ export default function InformesPage() {
                         </td>
                         <td style={styles.td}>{r.nombre} {r.apellido}</td>
                         <td style={styles.td}>{r.dni}</td>
-                        <td style={styles.td}>{r.lote_destino}</td>
-                        <td style={styles.td}>{r.vehiculo_tipo || "—"}</td>
+                        <td style={styles.td}>{r.lote_destino || "—"}</td>
+                        <td style={styles.td}>{r.vehiculo_tipo === "si" ? "Sí" : r.vehiculo_tipo === "no" ? "No" : "—"}</td>
                         <td style={styles.td}>{r.patente || "—"}</td>
                         <td style={styles.td}>
                           <div style={{ display: "flex", gap: "0.25rem" }}>

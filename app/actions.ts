@@ -26,12 +26,14 @@ export type Autorizado = {
   observaciones: string;
   patente: string;
   residente_id: number;
+  residente_nombre?: string;
   lote: string;
   fecha_expiracion: string;
   autorizado: boolean;
+  un_solo_uso: boolean;
+  usada: boolean;
   link_token: string;
   foto_url: string;
-  residente_nombre?: string;
   created_at: string;
 };
 
@@ -54,6 +56,77 @@ export type Registro = {
   foto_url: string;
   fecha_hora: string;
 };
+
+/**
+ * Estado de autorizacion de una persona frente al barrio.
+ *  residente     -> vive en el barrio
+ *  permanente    -> esta en el maestro de autorizados
+ *  temporal      -> invitacion confirmada por el residente, todavia vigente
+ *  pendiente     -> invitacion creada pero aun no confirmada por el residente
+ *  usada         -> invitacion de unica vez ya consumida
+ *  vencida       -> invitacion con fecha de expiracion pasada
+ *  previo        -> ya ingreso antes, tenemos sus datos, pero no tiene permiso vigente
+ *  no_registrado -> no existe en ninguna tabla
+ */
+export type EstadoAutorizacion =
+  | "residente"
+  | "permanente"
+  | "temporal"
+  | "pendiente"
+  | "usada"
+  | "vencida"
+  | "previo"
+  | "no_registrado";
+
+export type PersonaEncontrada = {
+  nombre: string;
+  apellido: string;
+  dni: string;
+  tipo: string;
+  lote: string;
+  patente: string;
+  observaciones: string;
+  residente_nombre: string;
+  foto_url: string;
+};
+
+export type ResultadoBusqueda = {
+  persona: PersonaEncontrada | null;
+  estado: EstadoAutorizacion;
+  autorizado: boolean;
+  ultimoRegistro: Registro | null;
+  ultimaEntrada: Registro | null;
+};
+
+// ========== HELPERS ==========
+
+/**
+ * Un DNI identifica a una unica persona. No se permite cargar el mismo DNI
+ * en residentes y en autorizados a la vez, ni duplicarlo dentro de autorizados.
+ *
+ * IMPORTANTE: la tabla `registros` NO se valida aca. Registros es la bitacora
+ * de ingresos: que alguien haya entrado antes es justamente el caso normal para
+ * despues promoverlo a autorizado permanente.
+ */
+async function dniYaRegistrado(dni: string, opciones: { ignorarAutorizadoId?: number } = {}) {
+  const sql = getSql();
+
+  const enResidentes = (await sql`
+    SELECT 1 FROM residentes WHERE dni = ${dni} LIMIT 1
+  `) as any[];
+  if (enResidentes.length > 0) return "residentes";
+
+  const enAutorizados = (await sql`
+    SELECT id FROM autorizados
+    WHERE dni = ${dni} AND usada = FALSE
+    LIMIT 1
+  `) as any[];
+  if (enAutorizados.length > 0 && enAutorizados[0].id !== opciones.ignorarAutorizadoId) {
+    return "autorizados";
+  }
+
+  return null;
+}
 
 // ========== RESIDENTES ==========
 
@@ -89,15 +162,9 @@ export async function createResidente(prevState: any, formData: FormData) {
     await ensureTables();
     const sql = getSql();
 
-    const existeEnOtraTabla = (await sql`
-      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
-      UNION ALL
-      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
-      LIMIT 1
-    `) as any[];
-
-    if (existeEnOtraTabla.length > 0) {
-      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    const duplicado = await dniYaRegistrado(dni);
+    if (duplicado === "autorizados") {
+      return { error: `El DNI ${dni} ya tiene una autorización cargada. Eliminala antes de darlo de alta como residente.` };
     }
 
     await sql`
@@ -105,7 +172,8 @@ export async function createResidente(prevState: any, formData: FormData) {
       VALUES (${nombre}, ${apellido}, ${lote}, ${telefono}, ${dni}, ${rol}, ${foto_url || null})
       ON CONFLICT (dni) DO UPDATE SET
         nombre = ${nombre}, apellido = ${apellido}, lote = ${lote},
-        telefono = ${telefono}, rol = ${rol}, foto_url = ${foto_url || null}
+        telefono = ${telefono}, rol = ${rol},
+        foto_url = COALESCE(${foto_url || null}, residentes.foto_url)
     `;
     revalidatePath("/maestros");
     return { success: true, message: "Residente guardado correctamente." };
@@ -123,12 +191,17 @@ export async function updateResidente(id: number, prevState: any, formData: Form
   const rol = String(formData.get("rol") || "propietario").trim();
   const foto_url = String(formData.get("foto_url") || "").trim();
 
+  if (!nombre || !apellido || !lote || !dni) {
+    return { error: "Nombre, apellido, lote y DNI son obligatorios." };
+  }
+
   try {
     await ensureTables();
     const sql = getSql();
     await sql`
       UPDATE residentes SET nombre=${nombre}, apellido=${apellido}, lote=${lote},
-        telefono=${telefono}, dni=${dni}, rol=${rol}, foto_url=${foto_url || null}
+        telefono=${telefono}, dni=${dni}, rol=${rol},
+        foto_url=${foto_url || null}
       WHERE id = ${id}
     `;
     revalidatePath("/maestros");
@@ -158,12 +231,12 @@ export async function getAutorizados(): Promise<Autorizado[]> {
     const sql = getSql();
     return (await sql`
       SELECT a.id, a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente,
-             a.residente_id, a.lote, a.fecha_expiracion, a.autorizado, a.link_token,
-             a.foto_url, a.created_at,
-             r.nombre || ' ' || r.apellido AS residente_nombre
+             a.residente_id, a.lote, a.fecha_expiracion, a.autorizado,
+             a.un_solo_uso, a.usada, a.link_token, a.foto_url, a.created_at,
+             COALESCE(a.residente_nombre, r.nombre || ' ' || r.apellido) AS residente_nombre
       FROM autorizados a
       LEFT JOIN residentes r ON r.id = a.residente_id
-      ORDER BY a.apellido, a.nombre
+      ORDER BY a.usada ASC, a.apellido, a.nombre
     `) as unknown as Autorizado[];
   } catch (error) {
     console.error("Error al obtener autorizados:", error);
@@ -175,7 +248,50 @@ export async function createAutorizado(prevState: any, formData: FormData) {
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
-  const tipo = String(formData.get("tipo") || "permanente").trim();
+  const observaciones = String(formData.get("observaciones") || "").trim();
+  const patente = String(formData.get("patente") || "").trim();
+  const lote = String(formData.get("lote") || "").trim();
+  const foto_url = String(formData.get("foto_url") || "").trim();
+
+  if (!nombre || !apellido || !dni) {
+    return { error: "Nombre, apellido y DNI son obligatorios." };
+  }
+  if (!lote) {
+    return { error: "El lote que autoriza es obligatorio." };
+  }
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    const duplicado = await dniYaRegistrado(dni);
+    if (duplicado === "residentes") {
+      return { error: `El DNI ${dni} ya está cargado como residente del barrio.` };
+    }
+    if (duplicado === "autorizados") {
+      return { error: `El DNI ${dni} ya tiene una autorización vigente. Editala o eliminala desde la lista.` };
+    }
+
+    // Alta manual desde Maestros => permanente y habilitado de entrada.
+    await sql`
+      INSERT INTO autorizados
+        (nombre, apellido, dni, tipo, observaciones, patente, lote,
+         autorizado, un_solo_uso, usada, foto_url)
+      VALUES
+        (${nombre}, ${apellido}, ${dni}, 'permanente', ${observaciones}, ${patente || null}, ${lote},
+         TRUE, FALSE, FALSE, ${foto_url || null})
+    `;
+    revalidatePath("/maestros");
+    return { success: true, message: "Autorizado permanente guardado correctamente." };
+  } catch (error: any) {
+    return { error: error.message || "Error al guardar autorizado." };
+  }
+}
+
+export async function updateAutorizado(id: number, prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
   const observaciones = String(formData.get("observaciones") || "").trim();
   const patente = String(formData.get("patente") || "").trim();
   const lote = String(formData.get("lote") || "").trim();
@@ -189,46 +305,14 @@ export async function createAutorizado(prevState: any, formData: FormData) {
     await ensureTables();
     const sql = getSql();
 
-    const existeEnOtraTabla = (await sql`
-      SELECT 'residentes' as tabla, dni FROM residentes WHERE dni = ${dni}
-      UNION ALL
-      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
-      UNION ALL
-      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
-      LIMIT 1
-    `) as any[];
-
-    if (existeEnOtraTabla.length > 0) {
-      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    const duplicado = await dniYaRegistrado(dni, { ignorarAutorizadoId: id });
+    if (duplicado) {
+      return { error: `El DNI ${dni} ya está cargado en ${duplicado}.` };
     }
 
     await sql`
-      INSERT INTO autorizados (nombre, apellido, dni, tipo, observaciones, patente, lote, autorizado, foto_url)
-      VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${observaciones}, ${patente || null}, ${lote}, true, ${foto_url || null})
-    `;
-    revalidatePath("/maestros");
-    return { success: true, message: "Autorizado guardado correctamente." };
-  } catch (error: any) {
-    return { error: error.message || "Error al guardar autorizado." };
-  }
-}
-
-export async function updateAutorizado(id: number, prevState: any, formData: FormData) {
-  const nombre = String(formData.get("nombre") || "").trim();
-  const apellido = String(formData.get("apellido") || "").trim();
-  const dni = String(formData.get("dni") || "").trim();
-  const tipo = String(formData.get("tipo") || "permanente").trim();
-  const observaciones = String(formData.get("observaciones") || "").trim();
-  const patente = String(formData.get("patente") || "").trim();
-  const lote = String(formData.get("lote") || "").trim();
-  const foto_url = String(formData.get("foto_url") || "").trim();
-
-  try {
-    await ensureTables();
-    const sql = getSql();
-    await sql`
       UPDATE autorizados SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
-        tipo=${tipo}, observaciones=${observaciones}, patente=${patente || null},
+        observaciones=${observaciones}, patente=${patente || null},
         lote=${lote}, foto_url=${foto_url || null}
       WHERE id = ${id}
     `;
@@ -252,6 +336,8 @@ export async function deleteAutorizado(id: number) {
 }
 
 // ========== INVITACIONES ==========
+// Una invitacion es una fila en `autorizados` con tipo='temporal' y autorizado=false
+// hasta que el residente la confirma desde el link.
 
 export async function createInvitacion(prevState: any, formData: FormData) {
   const nombre = String(formData.get("nombre") || "").trim();
@@ -261,43 +347,51 @@ export async function createInvitacion(prevState: any, formData: FormData) {
   const residente_nombre = String(formData.get("residente_nombre") || "").trim();
   const observaciones = String(formData.get("observaciones") || "").trim();
   const patente = String(formData.get("patente") || "").trim();
+  const un_solo_uso = formData.get("un_solo_uso") === "on" || formData.get("un_solo_uso") === "true";
+  const fecha_expiracion = String(formData.get("fecha_expiracion") || "").trim();
 
   if (!nombre || !apellido || !dni || !lote || !residente_nombre) {
-    return { error: "Todos los campos son obligatorios." };
+    return { error: "Nombre, apellido, DNI, lote y residente que invita son obligatorios." };
   }
 
   try {
     await ensureTables();
     const sql = getSql();
 
-    const existeEnOtraTabla = (await sql`
-      SELECT 'residentes' as tabla, dni FROM residentes WHERE dni = ${dni}
-      UNION ALL
-      SELECT 'registros' as tabla, dni FROM registros WHERE dni = ${dni}
-      UNION ALL
-      SELECT 'autorizados' as tabla, dni FROM autorizados WHERE dni = ${dni}
-      LIMIT 1
-    `) as any[];
-
-    if (existeEnOtraTabla.length > 0) {
-      return { error: `El DNI ${dni} ya está registrado en ${existeEnOtraTabla[0].tabla}. Un DNI solo puede tener 1 nombre, apellido y foto.` };
+    const duplicado = await dniYaRegistrado(dni);
+    if (duplicado === "residentes") {
+      return { error: `El DNI ${dni} pertenece a un residente del barrio.` };
+    }
+    if (duplicado === "autorizados") {
+      return { error: `El DNI ${dni} ya tiene una autorización vigente.` };
     }
 
-    const token = crypto.randomUUID().slice(0, 12);
+    const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 
     await sql`
-      INSERT INTO autorizados (nombre, apellido, dni, tipo, observaciones, patente, lote, autorizado, link_token)
-      VALUES (${nombre}, ${apellido}, ${dni}, 'temporal', ${observaciones}, ${patente || null}, ${lote}, false, ${token})
+      INSERT INTO autorizados
+        (nombre, apellido, dni, tipo, observaciones, patente, lote, residente_nombre,
+         fecha_expiracion, autorizado, un_solo_uso, usada, link_token)
+      VALUES
+        (${nombre}, ${apellido}, ${dni}, 'temporal', ${observaciones}, ${patente || null}, ${lote}, ${residente_nombre},
+         ${fecha_expiracion || null}, FALSE, ${un_solo_uso}, FALSE, ${token})
     `;
 
-    const inviteLink = `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/invite/confirm?token=${token}`;
+    const baseUrl =
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+    const inviteLink = `${baseUrl}/invite/confirm?token=${token}`;
 
     revalidatePath("/maestros");
     return {
       success: true,
-      message: `Invitación creada. Link de WhatsApp: ${inviteLink}`,
+      message: un_solo_uso
+        ? "Invitación de única vez creada. Enviala al residente para que la confirme."
+        : "Invitación temporal creada. Enviala al residente para que la confirme.",
       inviteLink,
-      whatsappLink: `https://wa.me/?text=${encodeURIComponent(`Has sido invitado al barrio. Confirmá tu ingreso: ${inviteLink}`)}`,
+      whatsappLink: `https://wa.me/?text=${encodeURIComponent(
+        `${residente_nombre}: confirmá el ingreso de ${nombre} ${apellido} (DNI ${dni}) al lote ${lote}: ${inviteLink}`
+      )}`,
     };
   } catch (error: any) {
     return { error: error.message || "Error al crear invitación." };
@@ -305,16 +399,38 @@ export async function createInvitacion(prevState: any, formData: FormData) {
 }
 
 export async function confirmInvitacion(token: string) {
+  if (!token) return { error: "Link inválido." };
+
   try {
     await ensureTables();
     const sql = getSql();
-    const result = await sql`
-      UPDATE autorizados SET autorizado = true WHERE link_token = ${token} AND autorizado = false
-    `;
-    if ((result as any).count === 0) {
-      return { error: "Link inválido o ya fue utilizado." };
+
+    const filas = (await sql`
+      UPDATE autorizados
+      SET autorizado = TRUE
+      WHERE link_token = ${token} AND autorizado = FALSE AND usada = FALSE
+      RETURNING id, nombre, apellido, dni, lote, un_solo_uso
+    `) as any[];
+
+    if (filas.length === 0) {
+      const existente = (await sql`
+        SELECT autorizado, usada FROM autorizados WHERE link_token = ${token} LIMIT 1
+      `) as any[];
+
+      if (existente.length === 0) return { error: "Link inválido." };
+      if (existente[0].usada) return { error: "Esta invitación ya fue utilizada." };
+      if (existente[0].autorizado) return { error: "Esta invitación ya estaba confirmada." };
+      return { error: "No se pudo confirmar la invitación." };
     }
-    return { success: true, message: "Ingreso autorizado correctamente." };
+
+    const inv = filas[0];
+    revalidatePath("/maestros");
+    return {
+      success: true,
+      message: inv.un_solo_uso
+        ? `Ingreso de ${inv.nombre} ${inv.apellido} autorizado por única vez.`
+        : `Ingreso de ${inv.nombre} ${inv.apellido} autorizado.`,
+    };
   } catch (error: any) {
     return { error: error.message };
   }
@@ -324,123 +440,129 @@ export async function getAutorizadoByToken(token: string) {
   try {
     await ensureTables();
     const sql = getSql();
-    const rows = await sql`
-      SELECT nombre, apellido, dni, lote, autorizado
-      FROM autorizados WHERE link_token = ${token}
-    `;
-    return (rows as any)[0] || null;
-  } catch (error) {
+    const rows = (await sql`
+      SELECT nombre, apellido, dni, lote, autorizado, usada, un_solo_uso, residente_nombre
+      FROM autorizados WHERE link_token = ${token} LIMIT 1
+    `) as any[];
+    return rows[0] || null;
+  } catch {
     return null;
   }
 }
 
-// ========== REGISTROS (ENTRADAS / SALIDAS) ==========
+// ========== BUSQUEDA DE PERSONA ==========
 
-export async function searchPersona(dni: string) {
+/**
+ * Resuelve el estado de una persona a partir del DNI.
+ *
+ * Estrategia (segun lo pedido):
+ *   1. Siempre se trae el ultimo registro de la bitacora -> datos de la persona.
+ *   2. Despues se consulta residentes / autorizados -> solo define el estado (badge).
+ *
+ * De esta forma una persona con ingresos previos siempre muestra sus datos,
+ * tenga o no una autorizacion vigente.
+ */
+export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
+  const vacio: ResultadoBusqueda = {
+    persona: null,
+    estado: "no_registrado",
+    autorizado: false,
+    ultimoRegistro: null,
+    ultimaEntrada: null,
+  };
+
+  const dniLimpio = String(dni || "").trim();
+  if (!dniLimpio) return vacio;
+
   try {
     await ensureTables();
     const sql = getSql();
 
-    const residente = (await sql`
-      SELECT nombre, apellido, dni, lote, foto_url
-      FROM residentes WHERE dni = ${dni} LIMIT 1
-    `) as any[];
-
-    if (residente.length > 0) {
-      return {
-        autorizado: {
-          ...residente[0],
-          tipo: "residente",
-          autorizado: true,
-          es_residente: true,
-        },
-        ultimoRegistro: null,
-      };
-    }
-
-    const ultimoRegistro = (await sql`
-      SELECT nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
-             residente_nombre, lote_destino, es_entrada, foto_url, fecha_hora
-      FROM registros
-      WHERE dni = ${dni}
-      ORDER BY fecha_hora DESC
-      LIMIT 1
-    `) as any[];
-
-    let autorizadoData: any = null;
-
-    if (ultimoRegistro.length > 0) {
-      const r = ultimoRegistro[0];
-      autorizadoData = {
-        nombre: r.nombre,
-        apellido: r.apellido,
-        dni: r.dni,
-        tipo: r.tipo,
-        patente: r.patente || "",
-        lote: r.lote_destino || "",
-        autorizado: false,
-        foto_url: r.foto_url || "",
-        es_registro_previo: true,
-      };
-    }
-
-    const autorizado = (await sql`
-      SELECT a.tipo, a.autorizado, a.patente, a.lote,
-             r.nombre || ' ' || r.apellido AS residente_nombre
-      FROM autorizados a
-      LEFT JOIN residentes r ON r.id = a.residente_id
-      WHERE a.dni = ${dni}
-      LIMIT 1
-    `) as any[];
-
-    if (autorizado.length > 0) {
-      const a = autorizado[0];
-      autorizadoData = {
-        ...autorizadoData,
-        nombre: autorizadoData?.nombre || "",
-        apellido: autorizadoData?.apellido || "",
-        dni: dni,
-        tipo: a.tipo,
-        autorizado: true,
-        es_autorizado_permanente: true,
-        residente_nombre: a.residente_nombre,
-      };
-    }
-
-    if (autorizado.length === 0) {
-      const invitacion = (await sql`
-        SELECT nombre, apellido, dni, lote, aprobada, usada, foto_url, patente
-        FROM invitaciones
-        WHERE dni = ${dni}
-        ORDER BY created_at DESC
+    const [registros, entradas, residentes, autorizaciones] = await Promise.all([
+      sql`
+        SELECT * FROM registros
+        WHERE dni = ${dniLimpio}
+        ORDER BY fecha_hora DESC
         LIMIT 1
-      `) as any[];
+      ` as unknown as Promise<any[]>,
+      sql`
+        SELECT * FROM registros
+        WHERE dni = ${dniLimpio} AND es_entrada = TRUE
+        ORDER BY fecha_hora DESC
+        LIMIT 1
+      ` as unknown as Promise<any[]>,
+      sql`
+        SELECT nombre, apellido, dni, lote, foto_url, rol
+        FROM residentes WHERE dni = ${dniLimpio} LIMIT 1
+      ` as unknown as Promise<any[]>,
+      sql`
+        SELECT a.id, a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente, a.lote,
+               a.autorizado, a.un_solo_uso, a.usada, a.fecha_expiracion, a.foto_url,
+               COALESCE(a.residente_nombre, r.nombre || ' ' || r.apellido) AS residente_nombre
+        FROM autorizados a
+        LEFT JOIN residentes r ON r.id = a.residente_id
+        WHERE a.dni = ${dniLimpio}
+        ORDER BY a.usada ASC, a.created_at DESC
+        LIMIT 1
+      ` as unknown as Promise<any[]>,
+    ]);
 
-      if (invitacion.length > 0) {
-        const inv = invitacion[0];
-        autorizadoData = {
-          ...autorizadoData,
-          nombre: autorizadoData?.nombre || inv.nombre,
-          apellido: autorizadoData?.apellido || inv.apellido,
-          dni: dni,
-          tipo: "temporal",
-          autorizado: inv.aprobada && !inv.usada,
-          es_invitacion: true,
-          invitacion_aprobada: inv.aprobada,
-          invitacion_usada: inv.usada,
-        };
+    const ultimoRegistro = registros[0] || null;
+    const ultimaEntrada = entradas[0] || null;
+    const residente = residentes[0] || null;
+    const auth = autorizaciones[0] || null;
+
+    if (!ultimoRegistro && !residente && !auth) return vacio;
+
+    // --- Datos de la persona: la bitacora es la base, el maestro tiene prioridad ---
+    const persona: PersonaEncontrada = {
+      nombre: residente?.nombre || auth?.nombre || ultimoRegistro?.nombre || "",
+      apellido: residente?.apellido || auth?.apellido || ultimoRegistro?.apellido || "",
+      dni: dniLimpio,
+      tipo: residente ? "residente" : auth?.tipo || ultimoRegistro?.tipo || "visita",
+      lote: auth?.lote || residente?.lote || ultimoRegistro?.lote_destino || "",
+      patente: ultimoRegistro?.patente || auth?.patente || "",
+      observaciones: auth?.observaciones || ultimoRegistro?.observaciones || "",
+      residente_nombre: auth?.residente_nombre || ultimoRegistro?.residente_nombre || "",
+      foto_url: residente?.foto_url || auth?.foto_url || ultimoRegistro?.foto_url || "",
+    };
+
+    // --- Estado de autorizacion ---
+    let estado: EstadoAutorizacion = "no_registrado";
+    let autorizado = false;
+
+    if (residente) {
+      estado = "residente";
+      autorizado = true;
+    } else if (auth) {
+      const vencida =
+        auth.fecha_expiracion && new Date(auth.fecha_expiracion) < new Date(new Date().toDateString());
+
+      if (auth.usada) {
+        estado = "usada";
+      } else if (!auth.autorizado) {
+        estado = "pendiente";
+      } else if (vencida) {
+        estado = "vencida";
+      } else if (auth.tipo === "permanente") {
+        estado = "permanente";
+        autorizado = true;
+      } else {
+        estado = "temporal";
+        autorizado = true;
       }
+    } else if (ultimoRegistro) {
+      estado = "previo";
     }
 
-    return {
-      autorizado: autorizadoData,
-      ultimoRegistro: ultimoRegistro[0] || null,
-    };
+    return { persona, estado, autorizado, ultimoRegistro, ultimaEntrada };
   } catch (error) {
     console.error("Error al buscar persona:", error);
-    return { autorizado: null, ultimoRegistro: null };
+    return vacio;
   }
 }
+
+// ========== REGISTROS (ENTRADAS / SALIDAS) ==========
 
 export async function checkDniCargadoReciente(dni: string) {
   try {
@@ -449,6 +571,7 @@ export async function checkDniCargadoReciente(dni: string) {
     const reciente = (await sql`
       SELECT id FROM registros
       WHERE dni = ${dni}
+        AND es_entrada = TRUE
         AND fecha_hora > NOW() - INTERVAL '5 minutes'
       LIMIT 1
     `) as any[];
@@ -465,50 +588,102 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   const tipo = String(formData.get("tipo") || "visita").trim();
   const subtipo = String(formData.get("subtipo") || "").trim();
   const vehiculo_tipo = String(formData.get("vehiculo_tipo") || "").trim();
-  const patente = String(formData.get("patente") || "").trim();
+  const patente = String(formData.get("patente") || "").trim().toUpperCase();
   const residente_nombre = String(formData.get("residente_nombre") || "").trim();
-  const lote_destino = String(formData.get("lote_destino") || "").trim();
   const observaciones = String(formData.get("observaciones") || "").trim();
   const es_manual = formData.get("es_manual") === "true";
   const motivo_manual = String(formData.get("motivo_manual") || "").trim();
-  const autorizado_por = String(formData.get("autorizado_por") || "").trim();
   const es_entrada = formData.get("es_entrada") === "true";
   const foto_url = String(formData.get("foto_url") || "").trim();
 
+  // El lote es un unico dato: donde se autoriza (entrada) o de donde se retira (salida).
+  const lote = String(
+    formData.get("lote_destino") || formData.get("autorizado_por") || ""
+  ).trim();
+
   if (!nombre || !apellido || !dni) {
     return { error: "Nombre, apellido y DNI son obligatorios." };
+  }
+
+  if (!lote) {
+    return {
+      error: es_entrada
+        ? "Debe indicar el lote que autoriza el ingreso."
+        : "Debe indicar el lote desde donde se retira.",
+    };
   }
 
   if (es_manual && !motivo_manual) {
     return { error: "Si es carga manual, debe indicar el motivo." };
   }
 
-  if (!autorizado_por) {
-    return { error: es_entrada ? "Debe indicar el lote que autoriza." : "Debe indicar el lote donde se retira." };
-  }
-
-  if (es_entrada) {
-    const cargadoReciente = await checkDniCargadoReciente(dni);
-    if (cargadoReciente) {
-      return { error: "Ya fue cargado el DNI hace menos de 5 minutos." };
-    }
+  if (vehiculo_tipo === "si" && !patente) {
+    return { error: "Si ingresa con vehículo, debe cargar la patente." };
   }
 
   try {
     await ensureTables();
     const sql = getSql();
+
+    if (es_entrada) {
+      const reciente = (await sql`
+        SELECT id FROM registros
+        WHERE dni = ${dni} AND es_entrada = TRUE
+          AND fecha_hora > NOW() - INTERVAL '5 minutes'
+        LIMIT 1
+      `) as any[];
+      if (reciente.length > 0) {
+        return { error: "Ya se registró una entrada para este DNI hace menos de 5 minutos." };
+      }
+    } else {
+      const tieneEntrada = (await sql`
+        SELECT id FROM registros
+        WHERE dni = ${dni} AND es_entrada = TRUE
+        LIMIT 1
+      `) as any[];
+      if (tieneEntrada.length === 0) {
+        return { error: "No se puede registrar una salida: este DNI no tiene ninguna entrada previa." };
+      }
+    }
+
     await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
                              autorizado_por, es_entrada, foto_url)
       VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
-              ${residente_nombre}, ${lote_destino}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${autorizado_por}, ${es_entrada}, ${foto_url || null})
+              ${residente_nombre}, ${lote}, ${observaciones}, ${es_manual}, ${motivo_manual},
+              ${lote}, ${es_entrada}, ${foto_url || null})
     `;
+
+    // Si la persona no tenia foto guardada en el maestro, la propagamos.
+    if (foto_url) {
+      await sql`
+        UPDATE autorizados SET foto_url = ${foto_url}
+        WHERE dni = ${dni} AND (foto_url IS NULL OR foto_url = '')
+      `;
+    }
+
+    // Una autorizacion de unica vez se consume al registrar la entrada.
+    let mensajeExtra = "";
+    if (es_entrada) {
+      const consumidas = (await sql`
+        UPDATE autorizados
+        SET usada = TRUE
+        WHERE dni = ${dni} AND un_solo_uso = TRUE AND autorizado = TRUE AND usada = FALSE
+        RETURNING id
+      `) as any[];
+      if (consumidas.length > 0) {
+        mensajeExtra = " La autorización de única vez quedó consumida.";
+      }
+    }
+
     revalidatePath("/");
+    revalidatePath("/informes");
     return {
       success: true,
-      message: es_entrada ? "Entrada registrada correctamente." : "Salida registrada correctamente.",
+      message:
+        (es_entrada ? "Entrada registrada correctamente." : "Salida registrada correctamente.") +
+        mensajeExtra,
     };
   } catch (error: any) {
     return { error: error.message || "Error al registrar movimiento." };
@@ -521,7 +696,7 @@ export async function updateRegistro(id: number, prevState: any, formData: FormD
   const dni = String(formData.get("dni") || "").trim();
   const tipo = String(formData.get("tipo") || "").trim();
   const vehiculo_tipo = String(formData.get("vehiculo_tipo") || "").trim();
-  const patente = String(formData.get("patente") || "").trim();
+  const patente = String(formData.get("patente") || "").trim().toUpperCase();
   const lote_destino = String(formData.get("lote_destino") || "").trim();
   const observaciones = String(formData.get("observaciones") || "").trim();
 
@@ -531,7 +706,8 @@ export async function updateRegistro(id: number, prevState: any, formData: FormD
     await sql`
       UPDATE registros SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
         tipo=${tipo}, vehiculo_tipo=${vehiculo_tipo}, patente=${patente},
-        lote_destino=${lote_destino}, observaciones=${observaciones}
+        lote_destino=${lote_destino}, autorizado_por=${lote_destino},
+        observaciones=${observaciones}
       WHERE id = ${id}
     `;
     revalidatePath("/");
