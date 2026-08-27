@@ -12,8 +12,11 @@
  *   5. DNI
  *   6. Ejemplar (A/B/C/D)
  *   7. Fecha de nacimiento   (DD-MM-AAAA)
- *   8. Fecha del documento   (DD-MM-AAAA)
+ *   8. Fecha de emision      (DD-MM-AAAA)  -- NO es el vencimiento
  *   9. Codigo interno
+ *
+ * El codigo no contiene la fecha de vencimiento del documento, asi que no
+ * se puede validar la vigencia a partir del escaneo.
  *
  * Sobre el separador: el PDF417 del DNI usa "@". Muchos lectores configurados
  * con teclado latinoamericano lo emiten como comilla doble, porque el "@" es
@@ -28,8 +31,7 @@ export type DniEscaneado = {
   dni: string;
   ejemplar: string;
   fechaNacimiento: Date | null;
-  fechaDocumento: Date | null;
-  vencido: boolean;
+  fechaEmision: Date | null;
   /** true si se pudo mapear la tira completa; false si solo se rescato el DNI */
   completo: boolean;
   crudo: string;
@@ -77,8 +79,7 @@ const VACIO: Omit<DniEscaneado, "crudo"> = {
   dni: "",
   ejemplar: "",
   fechaNacimiento: null,
-  fechaDocumento: null,
-  vencido: false,
+  fechaEmision: null,
   completo: false,
 };
 
@@ -109,7 +110,7 @@ export function parseDniEscaneado(entrada: string): DniEscaneado | null {
   const dni = sinSexo ? campo4 : campo5;
   const ejemplar = sinSexo ? campo5 : resto[0] || "";
   const fNacTexto = sinSexo ? resto[0] || "" : resto[1] || "";
-  const fDocTexto = sinSexo ? resto[1] || "" : resto[2] || "";
+  const fEmiTexto = sinSexo ? resto[1] || "" : resto[2] || "";
 
   const dniLimpio = dni.replace(/\D/g, "");
   if (!/^\d{6,9}$/.test(dniLimpio)) {
@@ -117,8 +118,6 @@ export function parseDniEscaneado(entrada: string): DniEscaneado | null {
     const suelto = crudo.match(/\b\d{7,9}\b/);
     return suelto ? { ...VACIO, dni: suelto[0], crudo } : null;
   }
-
-  const fechaDocumento = parseFecha(fDocTexto);
 
   return {
     nroTramite,
@@ -128,8 +127,7 @@ export function parseDniEscaneado(entrada: string): DniEscaneado | null {
     dni: dniLimpio,
     ejemplar: ejemplar.toUpperCase(),
     fechaNacimiento: parseFecha(fNacTexto),
-    fechaDocumento,
-    vencido: fechaDocumento ? fechaDocumento < hoySinHora() : false,
+    fechaEmision: parseFecha(fEmiTexto),
     completo: true,
     crudo,
   };

@@ -477,7 +477,7 @@ function PanelEscaneo({ datos }: { datos: DniEscaneado }) {
   }
 
   return (
-    <div style={{ ...styles.scanPanel, ...(datos.vencido ? styles.scanPanelVencido : null) }}>
+    <div style={styles.scanPanel}>
       <div style={styles.scanTitle}>Datos leídos del DNI</div>
 
       <div style={styles.scanGrid}>
@@ -488,15 +488,8 @@ function PanelEscaneo({ datos }: { datos: DniEscaneado }) {
         {datos.fechaNacimiento && (
           <span>Nac. {formatearFecha(datos.fechaNacimiento)}{edad !== null ? ` (${edad} años)` : ""}</span>
         )}
-        {datos.fechaDocumento && <span>Fecha doc. {formatearFecha(datos.fechaDocumento)}</span>}
+        {datos.fechaEmision && <span>Emitido {formatearFecha(datos.fechaEmision)}</span>}
       </div>
-
-      {datos.vencido && (
-        <p style={styles.scanAviso}>
-          ⚠ El documento figura con fecha {formatearFecha(datos.fechaDocumento)}, anterior a hoy.
-          Verificá la vigencia del DNI antes de autorizar el ingreso.
-        </p>
-      )}
     </div>
   );
 }
@@ -632,11 +625,9 @@ const styles: Record<string, React.CSSProperties> = {
   checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" },
 
   scanPanel: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.75rem", padding: "0.75rem 0.9rem" },
-  scanPanelVencido: { background: "#fffbeb", border: "1px solid #fcd34d" },
   scanTitle: { fontSize: "0.78rem", fontWeight: 800, color: "#1e40af", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "0.4rem" },
   scanGrid: { display: "flex", flexWrap: "wrap", gap: "0.35rem 1rem", fontSize: "0.9rem", color: "#1e293b" },
   scanTexto: { fontSize: "0.9rem", color: "#334155", margin: 0 },
-  scanAviso: { fontSize: "0.88rem", color: "#92400e", fontWeight: 700, marginTop: "0.6rem", marginBottom: 0, lineHeight: 1.45 },
 
   previewCard: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1rem", border: "1px solid #e2e8f0" },
   previewTitle: { margin: "0 0 0.6rem", fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" },
