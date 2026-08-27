@@ -98,6 +98,71 @@ export type ResultadoBusqueda = {
   ultimaEntrada: Registro | null;
 };
 
+// ========== IDENTIDAD (tabla personas) ==========
+
+export type Persona = {
+  dni: string;
+  nombre: string;
+  apellido: string;
+  foto_url: string;
+  actualizado_motivo: string | null;
+  actualizado_en: string;
+};
+
+/**
+ * Devuelve la identidad vigente de un DNI, o null si nunca se registro.
+ */
+async function getPersona(sql: ReturnType<typeof getSql>, dni: string) {
+  const filas = (await sql`
+    SELECT dni, nombre, apellido, foto_url, actualizado_motivo, actualizado_en
+    FROM personas WHERE dni = ${dni} LIMIT 1
+  `) as any[];
+  return (filas[0] as Persona) || null;
+}
+
+/**
+ * Crea o actualiza la identidad de un DNI.
+ *
+ * Reglas:
+ *  - Si la persona no existe, se crea con los datos recibidos.
+ *  - Si ya existe y `sobrescribir` es false (caso normal), NO se pisan
+ *    nombre ni apellido. La foto solo se completa si estaba vacia.
+ *  - Si `sobrescribir` es true (carga manual con motivo), se reemplazan
+ *    nombre, apellido y foto, y se deja asentado el motivo del cambio.
+ *
+ * Asi se garantiza que un DNI tenga una sola foto y un solo nombre.
+ */
+async function upsertPersona(
+  sql: ReturnType<typeof getSql>,
+  datos: { dni: string; nombre: string; apellido: string; foto_url?: string },
+  opciones: { sobrescribir?: boolean; motivo?: string } = {}
+) {
+  const { dni, nombre, apellido } = datos;
+  const foto = datos.foto_url?.trim() || null;
+  if (!dni || !nombre || !apellido) return;
+
+  if (opciones.sobrescribir) {
+    await sql`
+      INSERT INTO personas (dni, nombre, apellido, foto_url, actualizado_motivo, actualizado_en)
+      VALUES (${dni}, ${nombre}, ${apellido}, ${foto}, ${opciones.motivo || null}, CURRENT_TIMESTAMP)
+      ON CONFLICT (dni) DO UPDATE SET
+        nombre = EXCLUDED.nombre,
+        apellido = EXCLUDED.apellido,
+        foto_url = COALESCE(EXCLUDED.foto_url, personas.foto_url),
+        actualizado_motivo = EXCLUDED.actualizado_motivo,
+        actualizado_en = CURRENT_TIMESTAMP
+    `;
+    return;
+  }
+
+  await sql`
+    INSERT INTO personas (dni, nombre, apellido, foto_url)
+    VALUES (${dni}, ${nombre}, ${apellido}, ${foto})
+    ON CONFLICT (dni) DO UPDATE SET
+      foto_url = COALESCE(NULLIF(personas.foto_url, ''), EXCLUDED.foto_url)
+  `;
+}
+
 // ========== HELPERS ==========
 
 /**
@@ -175,7 +240,11 @@ export async function createResidente(prevState: any, formData: FormData) {
         telefono = ${telefono}, rol = ${rol},
         foto_url = COALESCE(${foto_url || null}, residentes.foto_url)
     `;
+
+    await upsertPersona(sql, { dni, nombre, apellido, foto_url }, { sobrescribir: true, motivo: "Alta/edición de residente" });
+
     revalidatePath("/maestros");
+    revalidatePath("/");
     return { success: true, message: "Residente guardado correctamente." };
   } catch (error: any) {
     return { error: error.message || "Error al guardar residente." };
@@ -204,7 +273,11 @@ export async function updateResidente(id: number, prevState: any, formData: Form
         foto_url=${foto_url || null}
       WHERE id = ${id}
     `;
+
+    await upsertPersona(sql, { dni, nombre, apellido, foto_url }, { sobrescribir: true, motivo: "Edición de residente" });
+
     revalidatePath("/maestros");
+    revalidatePath("/");
     return { success: true, message: "Residente actualizado." };
   } catch (error: any) {
     return { error: error.message };
@@ -271,7 +344,9 @@ export async function promoverAPermanente(prevState: any, formData: FormData) {
       return { error: "Esta persona es residente del barrio: ya tiene ingreso permanente." };
     }
 
-    // Datos ya conocidos: primero una autorizacion previa, si no la bitacora.
+    // La identidad sale de `personas`; si todavia no existe, de lo que haya.
+    const identidad = await getPersona(sql, dni);
+
     const autorizacionPrevia = (await sql`
       SELECT nombre, apellido, foto_url, patente, observaciones
       FROM autorizados WHERE dni = ${dni}
@@ -284,7 +359,7 @@ export async function promoverAPermanente(prevState: any, formData: FormData) {
       ORDER BY fecha_hora DESC LIMIT 1
     `) as any[];
 
-    const base = autorizacionPrevia[0] || registroPrevio[0] || null;
+    const base = identidad || autorizacionPrevia[0] || registroPrevio[0] || null;
 
     if (!base) {
       return {
@@ -293,7 +368,14 @@ export async function promoverAPermanente(prevState: any, formData: FormData) {
       };
     }
 
-    const foto = autorizacionPrevia[0]?.foto_url || registroPrevio[0]?.foto_url || null;
+    const foto =
+      identidad?.foto_url ||
+      autorizacionPrevia[0]?.foto_url ||
+      registroPrevio[0]?.foto_url ||
+      null;
+
+    const patenteConocida =
+      patente || autorizacionPrevia[0]?.patente || registroPrevio[0]?.patente || null;
 
     // Una autorizacion permanente reemplaza cualquier permiso anterior del mismo DNI.
     await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
@@ -304,9 +386,16 @@ export async function promoverAPermanente(prevState: any, formData: FormData) {
          autorizado, un_solo_uso, usada, foto_url)
       VALUES
         (${base.nombre}, ${base.apellido}, ${dni}, 'permanente', ${observaciones},
-         ${patente || base.patente || null}, ${lote},
+         ${patenteConocida}, ${lote},
          TRUE, FALSE, FALSE, ${foto})
     `;
+
+    await upsertPersona(sql, {
+      dni,
+      nombre: base.nombre,
+      apellido: base.apellido,
+      foto_url: foto || undefined,
+    });
 
     revalidatePath("/maestros");
     revalidatePath("/");
@@ -389,6 +478,10 @@ export async function createInvitacion(prevState: any, formData: FormData) {
         (${nombre}, ${apellido}, ${dni}, 'temporal', ${observaciones}, ${patente || null}, ${lote}, ${residente_nombre},
          ${fecha_expiracion || null}, FALSE, ${un_solo_uso}, FALSE, ${token})
     `;
+
+    // No pisa la identidad si el DNI ya existia: la foto y el nombre vigentes
+    // mandan por sobre lo que se tipee en la invitacion.
+    await upsertPersona(sql, { dni, nombre, apellido });
 
     const baseUrl =
       process.env.NEXT_PUBLIC_BASE_URL ||
@@ -491,7 +584,7 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     await ensureTables();
     const sql = getSql();
 
-    const [registros, entradas, residentes, autorizaciones] = await Promise.all([
+    const [registros, entradas, residentes, autorizaciones, identidades] = await Promise.all([
       sql`
         SELECT * FROM registros
         WHERE dni = ${dniLimpio}
@@ -518,26 +611,33 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
         ORDER BY a.usada ASC, a.created_at DESC
         LIMIT 1
       ` as unknown as Promise<any[]>,
+      sql`
+        SELECT dni, nombre, apellido, foto_url
+        FROM personas WHERE dni = ${dniLimpio} LIMIT 1
+      ` as unknown as Promise<any[]>,
     ]);
 
     const ultimoRegistro = registros[0] || null;
     const ultimaEntrada = entradas[0] || null;
     const residente = residentes[0] || null;
     const auth = autorizaciones[0] || null;
+    const identidad = identidades[0] || null;
 
-    if (!ultimoRegistro && !residente && !auth) return vacio;
+    if (!ultimoRegistro && !residente && !auth && !identidad) return vacio;
 
-    // --- Datos de la persona: la bitacora es la base, el maestro tiene prioridad ---
+    // --- Identidad: `personas` es la fuente unica de nombre, apellido y foto.
+    // El resto de los campos (lote, patente, observaciones) si salen del
+    // maestro o del ultimo movimiento, porque pueden cambiar en cada ingreso.
     const persona: PersonaEncontrada = {
-      nombre: residente?.nombre || auth?.nombre || ultimoRegistro?.nombre || "",
-      apellido: residente?.apellido || auth?.apellido || ultimoRegistro?.apellido || "",
+      nombre: identidad?.nombre || residente?.nombre || auth?.nombre || ultimoRegistro?.nombre || "",
+      apellido: identidad?.apellido || residente?.apellido || auth?.apellido || ultimoRegistro?.apellido || "",
       dni: dniLimpio,
       tipo: residente ? "residente" : auth?.tipo || ultimoRegistro?.tipo || "visita",
       lote: auth?.lote || residente?.lote || ultimoRegistro?.lote_destino || "",
       patente: ultimoRegistro?.patente || auth?.patente || "",
       observaciones: auth?.observaciones || ultimoRegistro?.observaciones || "",
       residente_nombre: auth?.residente_nombre || ultimoRegistro?.residente_nombre || "",
-      foto_url: residente?.foto_url || auth?.foto_url || ultimoRegistro?.foto_url || "",
+      foto_url: identidad?.foto_url || residente?.foto_url || auth?.foto_url || ultimoRegistro?.foto_url || "",
     };
 
     // --- Estado de autorizacion ---
@@ -659,20 +759,58 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       }
     }
 
+    // ---- Identidad unica por DNI ----
+    // Un DNI tiene un solo nombre, apellido y foto. Si la persona ya existe,
+    // los datos que vengan del formulario se ignoran, salvo que sea una carga
+    // manual con motivo: ahi si se reemplazan y la nueva version pasa a ser
+    // la vigente.
+    const personaExistente = await getPersona(sql, dni);
+    const puedeModificar = es_manual && Boolean(motivo_manual);
+
+    let nombreFinal = nombre;
+    let apellidoFinal = apellido;
+    let fotoFinal = foto_url;
+    let mensajeIdentidad = "";
+
+    if (personaExistente && !puedeModificar) {
+      nombreFinal = personaExistente.nombre;
+      apellidoFinal = personaExistente.apellido;
+      // La foto guardada manda. Solo se acepta una nueva si no habia ninguna.
+      fotoFinal = personaExistente.foto_url || foto_url;
+    }
+
+    if (personaExistente && puedeModificar) {
+      const cambioNombre =
+        personaExistente.nombre !== nombre || personaExistente.apellido !== apellido;
+      const cambioFoto = Boolean(foto_url) && foto_url !== personaExistente.foto_url;
+      if (cambioNombre || cambioFoto) {
+        mensajeIdentidad = " Se actualizaron los datos de la persona.";
+      }
+    }
+
+    await upsertPersona(
+      sql,
+      { dni, nombre: nombreFinal, apellido: apellidoFinal, foto_url: fotoFinal },
+      { sobrescribir: puedeModificar, motivo: motivo_manual }
+    );
+
     await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
                              autorizado_por, es_entrada, foto_url)
-      VALUES (${nombre}, ${apellido}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
+      VALUES (${nombreFinal}, ${apellidoFinal}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
               ${residente_nombre}, ${lote}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${lote}, ${es_entrada}, ${foto_url || null})
+              ${lote}, ${es_entrada}, ${fotoFinal || null})
     `;
 
-    // Si la persona no tenia foto guardada en el maestro, la propagamos.
-    if (foto_url) {
+    // La identidad vigente se replica en los maestros para que no queden
+    // dos fotos distintas del mismo DNI dando vueltas.
+    if (puedeModificar || fotoFinal) {
       await sql`
-        UPDATE autorizados SET foto_url = ${foto_url}
-        WHERE dni = ${dni} AND (foto_url IS NULL OR foto_url = '')
+        UPDATE autorizados
+        SET nombre = ${nombreFinal}, apellido = ${apellidoFinal},
+            foto_url = ${fotoFinal || null}
+        WHERE dni = ${dni}
       `;
     }
 
@@ -696,6 +834,7 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       success: true,
       message:
         (es_entrada ? "Entrada registrada correctamente." : "Salida registrada correctamente.") +
+        mensajeIdentidad +
         mensajeExtra,
     };
   } catch (error: any) {

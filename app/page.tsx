@@ -214,9 +214,23 @@ export default function HomePage() {
 
   const activarManual = (checked: boolean) => {
     setManualMode(checked);
-    setResultado(null);
     setMotivoManual("");
-    setForm({ ...FORM_VACIO, dni: checked ? dniInput.trim() : "" });
+
+    if (!checked) {
+      setForm({ ...FORM_VACIO });
+      return;
+    }
+
+    // Si ya se busco el DNI, la carga manual arranca con la identidad vigente
+    // para poder corregirla; si no, arranca vacia.
+    const p = resultado?.persona;
+    setForm({
+      ...FORM_VACIO,
+      dni: p?.dni || dniInput.trim() || escaneado?.dni || "",
+      nombre: p?.nombre || escaneado?.nombre || "",
+      apellido: p?.apellido || escaneado?.apellido || "",
+      fotoUrl: p?.foto_url || "",
+    });
   };
 
   const labelLote = mode === "salida" ? "Lote desde donde se retira *" : "Lote que autoriza el ingreso *";
@@ -326,9 +340,25 @@ export default function HomePage() {
               <Badge estado={resultado.estado} />
 
               {form.fotoUrl ? (
-                <img src={form.fotoUrl} alt={`${form.nombre} ${form.apellido}`} style={styles.previewFoto} />
+                <>
+                  <img src={form.fotoUrl} alt={`${form.nombre} ${form.apellido}`} style={styles.previewFoto} />
+                  <p style={styles.notaIdentidad}>
+                    Nombre y foto son los registrados para este DNI. Para corregirlos hay que
+                    usar <strong>Carga manual</strong> indicando el motivo.
+                  </p>
+                </>
               ) : (
-                <div style={styles.previewDangerBox}>Esta persona no tiene foto cargada</div>
+                <div style={styles.faltaFoto}>
+                  <div style={styles.previewDangerBox}>
+                    Esta persona no tiene foto cargada. Sacale una ahora: queda asociada al DNI
+                    para todos los ingresos siguientes.
+                  </div>
+                  <PhotoInput
+                    value={form.fotoUrl}
+                    onChange={(v) => setField("fotoUrl", v)}
+                    label="Foto de la persona"
+                  />
+                </div>
               )}
 
               <Row label="Nombre" value={form.nombre} />
@@ -389,6 +419,14 @@ export default function HomePage() {
             <input type="hidden" name="es_entrada" value={mode === "entrada" ? "true" : "false"} />
             <input type="hidden" name="es_manual" value="true" />
             <input type="hidden" name="foto_url" value={form.fotoUrl} />
+
+            {resultado?.persona && (
+              <div style={styles.avisoIdentidad}>
+                Este DNI ya está registrado como <strong>{resultado.persona.nombre} {resultado.persona.apellido}</strong>.
+                Si guardás con datos distintos, se reemplazan el nombre, el apellido y la foto
+                para todos los ingresos futuros. El motivo queda asentado.
+              </div>
+            )}
 
             <PhotoInput value={form.fotoUrl} onChange={(v) => setField("fotoUrl", v)} label="Foto de la persona" />
 
@@ -639,6 +677,9 @@ const styles: Record<string, React.CSSProperties> = {
   previewDanger: { fontSize: "0.9rem", color: "#dc2626", fontWeight: 600, marginTop: "0.5rem" },
   previewWarn: { fontSize: "0.9rem", color: "#92400e", fontWeight: 600, marginTop: "0.5rem" },
   previewDangerBox: { padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" },
+  notaIdentidad: { fontSize: "0.8rem", color: "#64748b", margin: "0 0 0.6rem", lineHeight: 1.45 },
+  faltaFoto: { marginBottom: "0.6rem" },
+  avisoIdentidad: { padding: "0.7rem 0.85rem", borderRadius: "0.75rem", background: "#fffbeb", border: "1px solid #fcd34d", color: "#92400e", fontSize: "0.88rem", fontWeight: 600, lineHeight: 1.5 },
 
   form: { display: "flex", flexDirection: "column", gap: "0.85rem" },
   formRow: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },

@@ -90,6 +90,23 @@ async function createTables() {
     );
   `;
 
+  // ---------- PERSONAS ----------
+  // Identidad unica por DNI. Un DNI = un nombre, un apellido y UNA foto.
+  // Los registros de la bitacora guardan una copia historica, pero la version
+  // vigente de la identidad vive siempre aca.
+  // Solo se puede modificar desde una carga manual indicando el motivo.
+  await sql`
+    CREATE TABLE IF NOT EXISTS personas (
+      dni VARCHAR(20) PRIMARY KEY,
+      nombre VARCHAR(100) NOT NULL,
+      apellido VARCHAR(100) NOT NULL,
+      foto_url TEXT,
+      actualizado_motivo TEXT,
+      actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
   // ---------- MIGRACIONES ----------
   // Se ejecutan DESPUES de crear las tablas, si no fallan en una base vacia.
   await sql`ALTER TABLE residentes  ADD COLUMN IF NOT EXISTS rol VARCHAR(20) DEFAULT 'propietario'`;
@@ -108,6 +125,55 @@ async function createTables() {
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_dni_fecha ON registros (dni, fecha_hora DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_fecha ON registros (fecha_hora DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_autorizados_dni ON autorizados (dni)`;
+
+  await backfillPersonas(sql);
+}
+
+/**
+ * Carga inicial de `personas` a partir de los datos que ya existen.
+ * Solo corre si la tabla esta vacia, asi que es seguro llamarla siempre.
+ *
+ * Prioridad de la identidad: residentes > autorizados > ultimo registro.
+ */
+async function backfillPersonas(sql: ReturnType<typeof getSql>) {
+  const yaHay = (await sql`SELECT 1 FROM personas LIMIT 1`) as any[];
+  if (yaHay.length > 0) return;
+
+  await sql`
+    INSERT INTO personas (dni, nombre, apellido, foto_url)
+    SELECT dni, nombre, apellido, foto_url FROM residentes
+    ON CONFLICT (dni) DO NOTHING
+  `;
+
+  await sql`
+    INSERT INTO personas (dni, nombre, apellido, foto_url)
+    SELECT DISTINCT ON (dni) dni, nombre, apellido, foto_url
+    FROM autorizados
+    ORDER BY dni, usada ASC, created_at DESC
+    ON CONFLICT (dni) DO NOTHING
+  `;
+
+  await sql`
+    INSERT INTO personas (dni, nombre, apellido, foto_url)
+    SELECT DISTINCT ON (dni) dni, nombre, apellido, foto_url
+    FROM registros
+    ORDER BY dni, fecha_hora DESC
+    ON CONFLICT (dni) DO NOTHING
+  `;
+
+  // Si la identidad quedo sin foto pero en algun movimiento si hubo una,
+  // la recuperamos para no perder fotos ya tomadas.
+  await sql`
+    UPDATE personas p
+    SET foto_url = f.foto_url
+    FROM (
+      SELECT DISTINCT ON (dni) dni, foto_url
+      FROM registros
+      WHERE foto_url IS NOT NULL AND foto_url <> ''
+      ORDER BY dni, fecha_hora DESC
+    ) f
+    WHERE p.dni = f.dni AND (p.foto_url IS NULL OR p.foto_url = '')
+  `;
 }
 
 export async function ensureTables() {
