@@ -466,16 +466,18 @@ export default function HomePage() {
               />
             </div>
 
-            <div style={styles.field}>
-              <label style={styles.label}>Patente</label>
-              <input
-                type="text"
-                value={formPatente}
-                onChange={(e) => setFormPatente(e.target.value)}
-                style={styles.input}
-                placeholder="Ingresar patente"
-              />
-            </div>
+            {formVehiculo === "si" && (
+              <div style={styles.field}>
+                <label style={styles.label}>Patente</label>
+                <input
+                  type="text"
+                  value={formPatente}
+                  onChange={(e) => setFormPatente(e.target.value)}
+                  style={styles.input}
+                  placeholder="Ingresar patente"
+                />
+              </div>
+            )}
 
             {manualState?.error && <div style={styles.error}>{manualState.error}</div>}
             {manualState?.success && <div style={styles.success}>{manualState.message}</div>}
