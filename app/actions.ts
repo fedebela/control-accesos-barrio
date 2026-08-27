@@ -368,6 +368,14 @@ export async function searchPersona(dni: string) {
       }
     }
 
+    const invitacion = (await sql`
+      SELECT id, nombre, apellido, dni, lote, aprobada, usada, foto_url, patente
+      FROM invitaciones
+      WHERE dni = ${dni}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `) as any[];
+
     const ultimoRegistro = (await sql`
       SELECT nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
              residente_nombre, lote_destino, es_entrada, foto_url, fecha_hora
@@ -379,6 +387,23 @@ export async function searchPersona(dni: string) {
 
     let autorizadoData = autorizado[0] || null;
 
+    if (!autorizadoData && invitacion.length > 0) {
+      const inv = invitacion[0];
+      autorizadoData = {
+        nombre: inv.nombre,
+        apellido: inv.apellido,
+        dni: inv.dni,
+        lote: inv.lote,
+        patente: inv.patente || "",
+        autorizado: inv.aprobada && !inv.usada,
+        tipo: "temporal",
+        foto_url: inv.foto_url || "",
+        es_invitacion: true,
+        invitacion_aprobada: inv.aprobada,
+        invitacion_usada: inv.usada,
+      };
+    }
+
     if (!autorizadoData && ultimoRegistro.length > 0) {
       const r = ultimoRegistro[0];
       autorizadoData = {
@@ -388,7 +413,7 @@ export async function searchPersona(dni: string) {
         tipo: r.tipo,
         patente: r.patente || "",
         lote: r.lote_destino || "",
-        autorizado: true,
+        autorizado: false,
         foto_url: r.foto_url || "",
         es_registro_previo: true,
       };

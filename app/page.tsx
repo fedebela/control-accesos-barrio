@@ -200,15 +200,29 @@ export default function HomePage() {
   function getPreviewBadge() {
     if (!searchResult?.autorizado) return null;
     const a = searchResult.autorizado;
+
     if (a.es_residente) return { text: "RESIDENTE", color: "#166534", bg: "#dcfce7" };
-    if (a.es_registro_previo && a.tipo === "permanente" && a.autorizado) return { text: "REGISTRO PREVIO - AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
-    if (a.es_registro_previo && a.tipo === "temporal" && a.autorizado) return { text: "REGISTRO PREVIO - AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
-    if (a.es_registro_previo && a.tipo === "habitual" && a.autorizado) return { text: "REGISTRO PREVIO - AUTORIZADO HABITUAL", color: "#166534", bg: "#dcfce7" };
-    if (a.es_registro_previo && !a.autorizado) return { text: "REGISTRO PREVIO - NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
-    if (a.tipo === "permanente" && a.autorizado) return { text: "AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
-    if (a.tipo === "temporal" && a.autorizado) return { text: "AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
-    if (a.tipo === "habitual" && a.autorizado) return { text: "AUTORIZADO HABITUAL", color: "#166534", bg: "#dcfce7" };
-    if (!a.autorizado) return { text: "NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
+
+    if (a.tipo === "permanente" && a.autorizado) {
+      return { text: "AUTORIZADO PERMANENTE", color: "#166534", bg: "#dcfce7" };
+    }
+
+    if (a.es_invitacion && a.invitacion_aprobada && !a.invitacion_usada) {
+      return { text: "AUTORIZADO TEMPORAL", color: "#166534", bg: "#dcfce7" };
+    }
+
+    if (a.es_invitacion && !a.invitacion_aprobada) {
+      return { text: "AUTORIZACIÓN PENDIENTE", color: "#92400e", bg: "#fef3c7" };
+    }
+
+    if (a.es_registro_previo && !a.autorizado) {
+      return { text: "NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
+    }
+
+    if (!a.autorizado) {
+      return { text: "NO AUTORIZADO", color: "#991b1b", bg: "#fee2e2" };
+    }
+
     return { text: "AUTORIZADO", color: "#166534", bg: "#dcfce7" };
   }
 
