@@ -52,6 +52,7 @@ export type Registro = {
   es_manual: boolean;
   motivo_manual: string;
   autorizado_por: string;
+  autorizacion_medio: string;
   es_entrada: boolean;
   foto_url: string;
   fecha_hora: string;
@@ -677,6 +678,53 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
 
 // ========== REGISTROS (ENTRADAS / SALIDAS) ==========
 
+/**
+ * Determina si un DNI tiene autorizacion vigente para ingresar.
+ * Se usa tanto para el badge de la pantalla como para validar en el servidor,
+ * asi que la UI no puede saltearse el control.
+ */
+async function tieneAutorizacionVigente(sql: ReturnType<typeof getSql>, dni: string) {
+  const residente = (await sql`
+    SELECT 1 FROM residentes WHERE dni = ${dni} LIMIT 1
+  `) as any[];
+  if (residente.length > 0) return true;
+
+  const filas = (await sql`
+    SELECT tipo, autorizado, usada, fecha_expiracion
+    FROM autorizados WHERE dni = ${dni}
+    ORDER BY usada ASC, created_at DESC LIMIT 1
+  `) as any[];
+  if (filas.length === 0) return false;
+
+  const a = filas[0];
+  if (a.usada || !a.autorizado) return false;
+
+  if (a.fecha_expiracion) {
+    const hoy = new Date();
+    const limite = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+    if (new Date(a.fecha_expiracion) < limite) return false;
+  }
+  return true;
+}
+
+/** Residentes de un lote, para poder pedirles autorizacion por telefono o WhatsApp. */
+export async function getResidentesDeLote(lote: string) {
+  const limpio = String(lote || "").trim();
+  if (!limpio) return [];
+  try {
+    await ensureTables();
+    const sql = getSql();
+    return (await sql`
+      SELECT nombre, apellido, telefono, rol
+      FROM residentes
+      WHERE lower(lote) = lower(${limpio})
+      ORDER BY rol, apellido
+    `) as any[];
+  } catch {
+    return [];
+  }
+}
+
 export async function checkDniCargadoReciente(dni: string) {
   try {
     await ensureTables();
@@ -710,9 +758,11 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   const foto_url = String(formData.get("foto_url") || "").trim();
 
   // El lote es un unico dato: donde se autoriza (entrada) o de donde se retira (salida).
-  const lote = String(
-    formData.get("lote_destino") || formData.get("autorizado_por") || ""
-  ).trim();
+  const lote = String(formData.get("lote_destino") || "").trim();
+
+  // Solo se completan cuando la persona NO tiene autorizacion vigente.
+  const autorizado_por = String(formData.get("autorizado_por") || "").trim();
+  const autorizacion_medio = String(formData.get("autorizacion_medio") || "").trim();
 
   if (!nombre || !apellido || !dni) {
     return { error: "Nombre, apellido y DNI son obligatorios." };
@@ -747,6 +797,22 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       `) as any[];
       if (reciente.length > 0) {
         return { error: "Ya se registró una entrada para este DNI hace menos de 5 minutos." };
+      }
+
+      // ---- Sin autorizacion vigente no se puede ingresar ----
+      // Hay que conseguir el visto bueno del residente por telefono o WhatsApp
+      // y dejar asentado quien lo dio.
+      const autorizada = await tieneAutorizacionVigente(sql, dni);
+      if (!autorizada) {
+        if (!autorizacion_medio || !autorizado_por) {
+          return {
+            error:
+              `${nombre} ${apellido} no tiene autorización vigente. ` +
+              `Comunicate con el residente del lote ${lote} y, una vez que autorice, ` +
+              `registrá quién lo hizo y por qué medio.`,
+            requiereAutorizacion: true,
+          };
+        }
       }
     } else {
       const tieneEntrada = (await sql`
@@ -797,10 +863,10 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
     await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
-                             autorizado_por, es_entrada, foto_url)
+                             autorizado_por, autorizacion_medio, es_entrada, foto_url)
       VALUES (${nombreFinal}, ${apellidoFinal}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
               ${residente_nombre}, ${lote}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${lote}, ${es_entrada}, ${fotoFinal || null})
+              ${autorizado_por || null}, ${autorizacion_medio || null}, ${es_entrada}, ${fotoFinal || null})
     `;
 
     // La identidad vigente se replica en los maestros para que no queden
@@ -858,8 +924,7 @@ export async function updateRegistro(id: number, prevState: any, formData: FormD
     await sql`
       UPDATE registros SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
         tipo=${tipo}, vehiculo_tipo=${vehiculo_tipo}, patente=${patente},
-        lote_destino=${lote_destino}, autorizado_por=${lote_destino},
-        observaciones=${observaciones}
+        lote_destino=${lote_destino}, observaciones=${observaciones}
       WHERE id = ${id}
     `;
     revalidatePath("/");

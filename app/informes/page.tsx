@@ -106,6 +106,7 @@ export default function InformesPage() {
                   <th style={styles.th}>Lote</th>
                   <th style={styles.th}>Vehículo</th>
                   <th style={styles.th}>Patente</th>
+                  <th style={styles.th}>Autorizó</th>
                   <th style={styles.th}>Acciones</th>
                 </tr>
               </thead>
@@ -137,6 +138,7 @@ export default function InformesPage() {
                           </select>
                         </td>
                         <td style={styles.td}><input value={editForm.patente} onChange={(e) => setEditForm({ ...editForm, patente: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }} /></td>
+                        <td style={styles.td}>—</td>
                         <td style={styles.td}>
                           <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button onClick={handleUpdate} style={{ padding: "0.25rem 0.5rem", borderRadius: "0.35rem", border: "none", background: "#16a34a", color: "#fff", fontWeight: 600, fontSize: "0.75rem", cursor: "pointer" }}>OK</button>
@@ -157,6 +159,14 @@ export default function InformesPage() {
                         <td style={styles.td}>{r.lote_destino || "—"}</td>
                         <td style={styles.td}>{r.vehiculo_tipo === "si" ? "Sí" : r.vehiculo_tipo === "no" ? "No" : "—"}</td>
                         <td style={styles.td}>{r.patente || "—"}</td>
+                        <td style={styles.td}>
+                          {r.autorizado_por ? (
+                            <span style={styles.autorizoBadge}>
+                              {r.autorizado_por}
+                              {r.autorizacion_medio ? ` · ${r.autorizacion_medio}` : ""}
+                            </span>
+                          ) : "—"}
+                        </td>
                         <td style={styles.td}>
                           <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button onClick={() => fillEditForm(r)} style={{ padding: "0.25rem 0.5rem", borderRadius: "0.35rem", border: "1px solid #fef3c7", background: "#fefce8", color: "#a16207", fontWeight: 600, fontSize: "0.75rem", cursor: "pointer" }}>Editar</button>
@@ -199,6 +209,7 @@ const styles: Record<string, React.CSSProperties> = {
   td: { padding: "0.6rem 0.75rem", fontSize: "0.9rem", color: "#334155" },
   badgeEntry: { padding: "0.15rem 0.5rem", borderRadius: "0.25rem", background: "#dcfce7", color: "#166534", fontWeight: 700, fontSize: "0.75rem" },
   badgeExit: { padding: "0.15rem 0.5rem", borderRadius: "0.25rem", background: "#fee2e2", color: "#991b1b", fontWeight: 700, fontSize: "0.75rem" },
+  autorizoBadge: { padding: "0.15rem 0.5rem", borderRadius: "0.25rem", background: "#fff7ed", color: "#9a3412", fontWeight: 600, fontSize: "0.75rem", border: "1px solid #fed7aa" },
   error: { padding: "0.7rem", borderRadius: "0.75rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, marginBottom: "1rem" },
   success: { padding: "0.7rem", borderRadius: "0.75rem", background: "#ecfdf5", color: "#059669", fontWeight: 600, marginBottom: "1rem" },
 };

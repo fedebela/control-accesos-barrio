@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState, useRef, useEffect, useCallback } from "react";
-import { searchPersona, registrarMovimiento, type ResultadoBusqueda, type EstadoAutorizacion } from "@/app/actions";
+import { searchPersona, registrarMovimiento, getResidentesDeLote, type ResultadoBusqueda, type EstadoAutorizacion } from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
 
 // ---------------------------------------------------------------- PhotoInput
@@ -125,6 +125,8 @@ export default function HomePage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [escaneado, setEscaneado] = useState<DniEscaneado | null>(null);
   const [errorScan, setErrorScan] = useState<string | null>(null);
+  const [authQuien, setAuthQuien] = useState("");
+  const [authMedio, setAuthMedio] = useState("");
   const [estado, action, pending] = useActionState(registrarMovimiento, null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -140,6 +142,8 @@ export default function HomePage() {
     setMotivoManual("");
     setEscaneado(null);
     setErrorScan(null);
+    setAuthQuien("");
+    setAuthMedio("");
     setForm({ ...FORM_VACIO });
     if (scanRef.current) { scanRef.current.value = ""; scanRef.current.focus(); }
   }, []);
@@ -237,6 +241,17 @@ export default function HomePage() {
   const textoBoton = mode === "entrada" ? "Registrar Entrada" : "Registrar Salida";
   const hayPersona = Boolean(resultado?.persona);
   const noRegistrado = Boolean(resultado && !resultado.persona);
+
+  // Una entrada sin autorizacion vigente exige lote, quien autorizo y por que medio.
+  // En una salida no aplica: si la persona esta adentro, tiene que poder salir.
+  // En carga manual siempre se pide, salvo que la busqueda haya dado autorizada:
+  // una persona que se carga por primera vez nunca tiene permiso previo.
+  const necesitaAutorizacion =
+    mode === "entrada" &&
+    !resultado?.autorizado &&
+    (Boolean(resultado) || manualMode);
+  const autorizacionCompleta = Boolean(authQuien.trim() && authMedio && form.lote.trim());
+  const bloqueado = necesitaAutorizacion && !autorizacionCompleta;
 
   return (
     <div style={styles.container}>
@@ -404,11 +419,32 @@ export default function HomePage() {
               labelLote={labelLote}
             />
 
+            {necesitaAutorizacion && (
+              <BloqueAutorizacion
+                lote={form.lote}
+                quien={authQuien}
+                medio={authMedio}
+                onQuien={setAuthQuien}
+                onMedio={setAuthMedio}
+              />
+            )}
+
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            <button type="submit" style={mode === "entrada" ? styles.submitBtn : styles.submitBtnExit} disabled={pending}>
-              {pending ? "Procesando…" : textoBoton}
+            <button
+              type="submit"
+              style={{
+                ...(mode === "entrada" ? styles.submitBtn : styles.submitBtnExit),
+                ...(bloqueado ? styles.submitBtnBloqueado : null),
+              }}
+              disabled={pending || bloqueado}
+            >
+              {pending
+                ? "Procesando…"
+                : bloqueado
+                  ? "Falta la autorización del residente"
+                  : textoBoton}
             </button>
           </form>
         )}
@@ -473,11 +509,32 @@ export default function HomePage() {
               <span style={styles.counter}>{motivoManual.length}/200</span>
             </div>
 
+            {necesitaAutorizacion && (
+              <BloqueAutorizacion
+                lote={form.lote}
+                quien={authQuien}
+                medio={authMedio}
+                onQuien={setAuthQuien}
+                onMedio={setAuthMedio}
+              />
+            )}
+
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            <button type="submit" style={mode === "entrada" ? styles.submitBtn : styles.submitBtnExit} disabled={pending}>
-              {pending ? "Procesando…" : `${textoBoton} (manual)`}
+            <button
+              type="submit"
+              style={{
+                ...(mode === "entrada" ? styles.submitBtn : styles.submitBtnExit),
+                ...(bloqueado ? styles.submitBtnBloqueado : null),
+              }}
+              disabled={pending || bloqueado}
+            >
+              {pending
+                ? "Procesando…"
+                : bloqueado
+                  ? "Falta la autorización del residente"
+                  : `${textoBoton} (manual)`}
             </button>
           </form>
         )}
@@ -495,6 +552,109 @@ function Row({ label, value }: { label: string; value: string }) {
     <div style={styles.previewRow}>
       <span style={styles.previewLabel}>{label}:</span>
       <span style={{ textAlign: "right" }}>{value || "—"}</span>
+    </div>
+  );
+}
+
+/**
+ * Bloque que aparece cuando la persona no tiene autorizacion vigente.
+ * Hasta que no se registre quien autorizo y por que via, no se puede grabar
+ * la entrada. El mismo control se repite en el servidor.
+ */
+function BloqueAutorizacion({
+  lote, quien, medio, onQuien, onMedio,
+}: {
+  lote: string;
+  quien: string;
+  medio: string;
+  onQuien: (v: string) => void;
+  onMedio: (v: string) => void;
+}) {
+  const [vecinos, setVecinos] = useState<any[]>([]);
+
+  useEffect(() => {
+    const l = lote.trim();
+    if (!l) { setVecinos([]); return; }
+    let activo = true;
+    getResidentesDeLote(l).then((r) => { if (activo) setVecinos(r); });
+    return () => { activo = false; };
+  }, [lote]);
+
+  const soloDigitos = (t: string) => String(t || "").replace(/\D/g, "");
+
+  return (
+    <div style={styles.bloqueAuth}>
+      <div style={styles.bloqueAuthTitulo}>Ingreso no autorizado</div>
+      <p style={styles.bloqueAuthTexto}>
+        Esta persona no tiene autorización vigente. No se puede registrar la entrada
+        hasta que un residente la autorice por teléfono o WhatsApp.
+      </p>
+
+      {!lote.trim() && (
+        <p style={styles.bloqueAuthAviso}>Cargá primero el lote para ver a quién contactar.</p>
+      )}
+
+      {lote.trim() && vecinos.length === 0 && (
+        <p style={styles.bloqueAuthAviso}>
+          No hay residentes cargados en el lote {lote}. Verificá el lote o cargalo en Maestros.
+        </p>
+      )}
+
+      {vecinos.length > 0 && (
+        <div style={styles.vecinos}>
+          {vecinos.map((v, i) => (
+            <div key={i} style={styles.vecino}>
+              <span>
+                <strong>{v.nombre} {v.apellido}</strong>
+                <span style={styles.vecinoRol}> · {v.rol === "inquilino" ? "Inquilino" : "Propietario"}</span>
+                {v.telefono ? <span style={styles.vecinoRol}> · {v.telefono}</span> : null}
+              </span>
+              <span style={{ display: "flex", gap: "0.35rem" }}>
+                {v.telefono && (
+                  <>
+                    <a href={`tel:${soloDigitos(v.telefono)}`} style={styles.btnLlamar}>Llamar</a>
+                    <a
+                      href={`https://wa.me/${soloDigitos(v.telefono)}?text=${encodeURIComponent(
+                        `Hola ${v.nombre}, hay una persona en la guardia solicitando ingresar al lote ${lote}. ¿Autorizás el ingreso?`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={styles.btnWhatsapp}
+                    >
+                      WhatsApp
+                    </a>
+                  </>
+                )}
+                <button type="button" onClick={() => onQuien(`${v.nombre} ${v.apellido}`)} style={styles.btnElegir}>
+                  Autorizó
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={styles.formRow}>
+        <div style={styles.field}>
+          <label style={styles.label}>¿Quién autorizó? *</label>
+          <input
+            name="autorizado_por"
+            value={quien}
+            onChange={(e) => onQuien(e.target.value)}
+            style={styles.input}
+            placeholder="Nombre del residente"
+          />
+        </div>
+        <div style={styles.field}>
+          <label style={styles.label}>¿Por qué medio? *</label>
+          <select name="autorizacion_medio" value={medio} onChange={(e) => onMedio(e.target.value)} style={styles.input}>
+            <option value="">Seleccionar…</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="telefono">Teléfono</option>
+            <option value="presencial">Presencial</option>
+          </select>
+        </div>
+      </div>
     </div>
   );
 }
@@ -694,6 +854,18 @@ const styles: Record<string, React.CSSProperties> = {
   success: { padding: "0.75rem", borderRadius: "0.75rem", background: "#ecfdf5", color: "#059669", fontWeight: 600 },
   submitBtn: { padding: "0.95rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #16a34a, #22c55e)", color: "#fff", fontWeight: 800, fontSize: "1.05rem", cursor: "pointer" },
   submitBtnExit: { padding: "0.95rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #b91c1c, #ef4444)", color: "#fff", fontWeight: 800, fontSize: "1.05rem", cursor: "pointer" },
+  submitBtnBloqueado: { background: "#cbd5e1", color: "#64748b", cursor: "not-allowed" },
+
+  bloqueAuth: { background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.85rem", padding: "1rem" },
+  bloqueAuthTitulo: { fontSize: "0.8rem", fontWeight: 800, color: "#991b1b", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "0.4rem" },
+  bloqueAuthTexto: { fontSize: "0.9rem", color: "#7f1d1d", margin: "0 0 0.75rem", lineHeight: 1.5, fontWeight: 500 },
+  bloqueAuthAviso: { fontSize: "0.85rem", color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: "0.5rem", padding: "0.5rem 0.7rem", margin: "0 0 0.75rem", fontWeight: 600 },
+  vecinos: { display: "flex", flexDirection: "column", gap: "0.4rem", marginBottom: "0.85rem" },
+  vecino: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", background: "#fff", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.5rem 0.7rem", fontSize: "0.88rem", flexWrap: "wrap" },
+  vecinoRol: { color: "#64748b", fontWeight: 400 },
+  btnLlamar: { padding: "0.3rem 0.6rem", borderRadius: "0.4rem", background: "#2563eb", color: "#fff", fontWeight: 700, fontSize: "0.78rem", textDecoration: "none" },
+  btnWhatsapp: { padding: "0.3rem 0.6rem", borderRadius: "0.4rem", background: "#25d366", color: "#fff", fontWeight: 700, fontSize: "0.78rem", textDecoration: "none" },
+  btnElegir: { padding: "0.3rem 0.6rem", borderRadius: "0.4rem", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", fontWeight: 700, fontSize: "0.78rem", cursor: "pointer" },
 
   empty: { color: "#94a3b8", fontStyle: "italic" },
   recordsList: { display: "flex", flexDirection: "column", gap: "0.5rem" },

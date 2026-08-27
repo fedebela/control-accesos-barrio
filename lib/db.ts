@@ -83,7 +83,10 @@ async function createTables() {
       observaciones TEXT,
       es_manual BOOLEAN DEFAULT FALSE,
       motivo_manual TEXT,
-      autorizado_por VARCHAR(100),
+      -- Cuando la persona no tiene autorizacion vigente, se deja asentado
+      -- quien habilito el ingreso y por que via (telefono / whatsapp / presencial).
+      autorizado_por VARCHAR(200),
+      autorizacion_medio VARCHAR(20),
       es_entrada BOOLEAN NOT NULL,
       foto_url TEXT,
       fecha_hora TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -120,6 +123,11 @@ async function createTables() {
 
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS foto_url TEXT`;
   await sql`ALTER TABLE registros   ALTER COLUMN residente_nombre TYPE VARCHAR(200)`;
+  // Quien habilito el ingreso de una persona sin autorizacion vigente y por que via.
+  await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS autorizacion_medio VARCHAR(20)`;
+  await sql`ALTER TABLE registros   ALTER COLUMN autorizado_por TYPE VARCHAR(200)`;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_residentes_lote ON residentes (lote)`;
 
   // ---------- INDICES ----------
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_dni_fecha ON registros (dni, fecha_hora DESC)`;
