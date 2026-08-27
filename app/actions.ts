@@ -341,40 +341,22 @@ export async function searchPersona(dni: string) {
     await ensureTables();
     const sql = getSql();
 
-    const autorizado = (await sql`
-      SELECT a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente, a.lote, a.autorizado, a.foto_url,
-             r.nombre || ' ' || r.apellido AS residente_nombre
-      FROM autorizados a
-      LEFT JOIN residentes r ON r.id = a.residente_id
-      WHERE a.dni = ${dni}
-      LIMIT 1
+    const residente = (await sql`
+      SELECT nombre, apellido, dni, lote, foto_url
+      FROM residentes WHERE dni = ${dni} LIMIT 1
     `) as any[];
 
-    if (autorizado.length === 0) {
-      const residente = (await sql`
-        SELECT nombre, apellido, dni, lote, foto_url
-        FROM residentes WHERE dni = ${dni} LIMIT 1
-      `) as any[];
-      if (residente.length > 0) {
-        return {
-          autorizado: {
-            ...residente[0],
-            tipo: "residente",
-            autorizado: true,
-            es_residente: true,
-          },
-          ultimoRegistro: null,
-        };
-      }
+    if (residente.length > 0) {
+      return {
+        autorizado: {
+          ...residente[0],
+          tipo: "residente",
+          autorizado: true,
+          es_residente: true,
+        },
+        ultimoRegistro: null,
+      };
     }
-
-    const invitacion = (await sql`
-      SELECT id, nombre, apellido, dni, lote, aprobada, usada, foto_url, patente
-      FROM invitaciones
-      WHERE dni = ${dni}
-      ORDER BY created_at DESC
-      LIMIT 1
-    `) as any[];
 
     const ultimoRegistro = (await sql`
       SELECT nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
@@ -385,26 +367,9 @@ export async function searchPersona(dni: string) {
       LIMIT 1
     `) as any[];
 
-    let autorizadoData = autorizado[0] || null;
+    let autorizadoData: any = null;
 
-    if (!autorizadoData && invitacion.length > 0) {
-      const inv = invitacion[0];
-      autorizadoData = {
-        nombre: inv.nombre,
-        apellido: inv.apellido,
-        dni: inv.dni,
-        lote: inv.lote,
-        patente: inv.patente || "",
-        autorizado: inv.aprobada && !inv.usada,
-        tipo: "temporal",
-        foto_url: inv.foto_url || "",
-        es_invitacion: true,
-        invitacion_aprobada: inv.aprobada,
-        invitacion_usada: inv.usada,
-      };
-    }
-
-    if (!autorizadoData && ultimoRegistro.length > 0) {
+    if (ultimoRegistro.length > 0) {
       const r = ultimoRegistro[0];
       autorizadoData = {
         nombre: r.nombre,
@@ -417,6 +382,54 @@ export async function searchPersona(dni: string) {
         foto_url: r.foto_url || "",
         es_registro_previo: true,
       };
+    }
+
+    const autorizado = (await sql`
+      SELECT a.tipo, a.autorizado, a.patente, a.lote,
+             r.nombre || ' ' || r.apellido AS residente_nombre
+      FROM autorizados a
+      LEFT JOIN residentes r ON r.id = a.residente_id
+      WHERE a.dni = ${dni}
+      LIMIT 1
+    `) as any[];
+
+    if (autorizado.length > 0) {
+      const a = autorizado[0];
+      autorizadoData = {
+        ...autorizadoData,
+        nombre: autorizadoData?.nombre || "",
+        apellido: autorizadoData?.apellido || "",
+        dni: dni,
+        tipo: a.tipo,
+        autorizado: true,
+        es_autorizado_permanente: true,
+        residente_nombre: a.residente_nombre,
+      };
+    }
+
+    if (autorizado.length === 0) {
+      const invitacion = (await sql`
+        SELECT nombre, apellido, dni, lote, aprobada, usada, foto_url, patente
+        FROM invitaciones
+        WHERE dni = ${dni}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `) as any[];
+
+      if (invitacion.length > 0) {
+        const inv = invitacion[0];
+        autorizadoData = {
+          ...autorizadoData,
+          nombre: autorizadoData?.nombre || inv.nombre,
+          apellido: autorizadoData?.apellido || inv.apellido,
+          dni: dni,
+          tipo: "temporal",
+          autorizado: inv.aprobada && !inv.usada,
+          es_invitacion: true,
+          invitacion_aprobada: inv.aprobada,
+          invitacion_usada: inv.usada,
+        };
+      }
     }
 
     return {
