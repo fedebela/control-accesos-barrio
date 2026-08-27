@@ -244,80 +244,93 @@ export async function getAutorizados(): Promise<Autorizado[]> {
   }
 }
 
-export async function createAutorizado(prevState: any, formData: FormData) {
-  const nombre = String(formData.get("nombre") || "").trim();
-  const apellido = String(formData.get("apellido") || "").trim();
+/**
+ * Marca como AUTORIZADO PERMANENTE a una persona que ya existe en el sistema.
+ *
+ * No se cargan nombre/apellido/foto a mano: se toman de lo que ya quedo grabado
+ * cuando la persona ingreso por primera vez (o de una invitacion previa).
+ * Solo se pide el lote que autoriza y, opcionalmente, patente y observaciones.
+ */
+export async function promoverAPermanente(prevState: any, formData: FormData) {
   const dni = String(formData.get("dni") || "").trim();
-  const observaciones = String(formData.get("observaciones") || "").trim();
-  const patente = String(formData.get("patente") || "").trim();
   const lote = String(formData.get("lote") || "").trim();
-  const foto_url = String(formData.get("foto_url") || "").trim();
+  const patente = String(formData.get("patente") || "").trim().toUpperCase();
+  const observaciones = String(formData.get("observaciones") || "").trim();
 
-  if (!nombre || !apellido || !dni) {
-    return { error: "Nombre, apellido y DNI son obligatorios." };
-  }
-  if (!lote) {
-    return { error: "El lote que autoriza es obligatorio." };
-  }
+  if (!dni) return { error: "Falta el DNI." };
+  if (!lote) return { error: "Indicá el lote que autoriza el ingreso permanente." };
 
   try {
     await ensureTables();
     const sql = getSql();
 
-    const duplicado = await dniYaRegistrado(dni);
-    if (duplicado === "residentes") {
-      return { error: `El DNI ${dni} ya está cargado como residente del barrio.` };
-    }
-    if (duplicado === "autorizados") {
-      return { error: `El DNI ${dni} ya tiene una autorización vigente. Editala o eliminala desde la lista.` };
+    const residente = (await sql`
+      SELECT 1 FROM residentes WHERE dni = ${dni} LIMIT 1
+    `) as any[];
+    if (residente.length > 0) {
+      return { error: "Esta persona es residente del barrio: ya tiene ingreso permanente." };
     }
 
-    // Alta manual desde Maestros => permanente y habilitado de entrada.
+    // Datos ya conocidos: primero una autorizacion previa, si no la bitacora.
+    const autorizacionPrevia = (await sql`
+      SELECT nombre, apellido, foto_url, patente, observaciones
+      FROM autorizados WHERE dni = ${dni}
+      ORDER BY usada ASC, created_at DESC LIMIT 1
+    `) as any[];
+
+    const registroPrevio = (await sql`
+      SELECT nombre, apellido, foto_url, patente
+      FROM registros WHERE dni = ${dni}
+      ORDER BY fecha_hora DESC LIMIT 1
+    `) as any[];
+
+    const base = autorizacionPrevia[0] || registroPrevio[0] || null;
+
+    if (!base) {
+      return {
+        error:
+          "No hay datos de esta persona. Primero tiene que registrar un ingreso desde la pantalla principal (carga manual).",
+      };
+    }
+
+    const foto = autorizacionPrevia[0]?.foto_url || registroPrevio[0]?.foto_url || null;
+
+    // Una autorizacion permanente reemplaza cualquier permiso anterior del mismo DNI.
+    await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
+
     await sql`
       INSERT INTO autorizados
         (nombre, apellido, dni, tipo, observaciones, patente, lote,
          autorizado, un_solo_uso, usada, foto_url)
       VALUES
-        (${nombre}, ${apellido}, ${dni}, 'permanente', ${observaciones}, ${patente || null}, ${lote},
-         TRUE, FALSE, FALSE, ${foto_url || null})
+        (${base.nombre}, ${base.apellido}, ${dni}, 'permanente', ${observaciones},
+         ${patente || base.patente || null}, ${lote},
+         TRUE, FALSE, FALSE, ${foto})
     `;
+
     revalidatePath("/maestros");
-    return { success: true, message: "Autorizado permanente guardado correctamente." };
+    revalidatePath("/");
+    return {
+      success: true,
+      message: `${base.nombre} ${base.apellido} quedó como autorizado permanente del lote ${lote}.`,
+    };
   } catch (error: any) {
-    return { error: error.message || "Error al guardar autorizado." };
+    return { error: error.message || "Error al marcar como autorizado permanente." };
   }
 }
 
-export async function updateAutorizado(id: number, prevState: any, formData: FormData) {
-  const nombre = String(formData.get("nombre") || "").trim();
-  const apellido = String(formData.get("apellido") || "").trim();
-  const dni = String(formData.get("dni") || "").trim();
-  const observaciones = String(formData.get("observaciones") || "").trim();
-  const patente = String(formData.get("patente") || "").trim();
-  const lote = String(formData.get("lote") || "").trim();
-  const foto_url = String(formData.get("foto_url") || "").trim();
-
-  if (!nombre || !apellido || !dni) {
-    return { error: "Nombre, apellido y DNI son obligatorios." };
-  }
-
+/**
+ * Quita la autorizacion de un DNI. Los registros de ingreso NO se tocan:
+ * la persona sigue existiendo en la bitacora, solo pierde el permiso.
+ */
+export async function revocarAutorizacion(dni: string) {
   try {
     await ensureTables();
     const sql = getSql();
-
-    const duplicado = await dniYaRegistrado(dni, { ignorarAutorizadoId: id });
-    if (duplicado) {
-      return { error: `El DNI ${dni} ya está cargado en ${duplicado}.` };
-    }
-
-    await sql`
-      UPDATE autorizados SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
-        observaciones=${observaciones}, patente=${patente || null},
-        lote=${lote}, foto_url=${foto_url || null}
-      WHERE id = ${id}
-    `;
+    await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
     revalidatePath("/maestros");
-    return { success: true, message: "Autorizado actualizado." };
+    revalidatePath("/");
+    return { success: true, message: "Autorización revocada." };
   } catch (error: any) {
     return { error: error.message };
   }
