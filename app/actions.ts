@@ -867,45 +867,16 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   }
 }
 
-export async function updateRegistro(id: number, prevState: any, formData: FormData) {
-  const nombre = String(formData.get("nombre") || "").trim();
-  const apellido = String(formData.get("apellido") || "").trim();
-  const dni = String(formData.get("dni") || "").trim();
-  const tipo = String(formData.get("tipo") || "").trim();
-  const vehiculo_tipo = String(formData.get("vehiculo_tipo") || "").trim();
-  const patente = String(formData.get("patente") || "").trim().toUpperCase();
-  const lote_destino = String(formData.get("lote_destino") || "").trim();
-  const observaciones = String(formData.get("observaciones") || "").trim();
 
-  try {
-    await ensureTables();
-    const sql = getSql();
-    await sql`
-      UPDATE registros SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
-        tipo=${tipo}, vehiculo_tipo=${vehiculo_tipo}, patente=${patente},
-        lote_destino=${lote_destino}, observaciones=${observaciones}
-      WHERE id = ${id}
-    `;
-    revalidatePath("/");
-    revalidatePath("/informes");
-    return { success: true, message: "Registro actualizado." };
-  } catch (error: any) {
-    return { error: error.message };
-  }
-}
-
-export async function deleteRegistro(id: number) {
-  try {
-    await ensureTables();
-    const sql = getSql();
-    await sql`DELETE FROM registros WHERE id = ${id}`;
-    revalidatePath("/");
-    revalidatePath("/informes");
-    return { success: true };
-  } catch (error: any) {
-    return { error: error.message };
-  }
-}
+// ---------------------------------------------------------------------------
+// La bitacora de movimientos es APPEND-ONLY. No existen updateRegistro ni
+// deleteRegistro a proposito: un registro de acceso, una vez asentado, no se
+// modifica ni se borra.
+//
+// Si un movimiento se cargo mal, se registra el correcto de nuevo y quedan los
+// dos: el erroneo y el que lo corrige. Poder editar o borrar invalidaria la
+// bitacora como evidencia de lo que paso en la guardia.
+// ---------------------------------------------------------------------------
 
 // La foto no se guarda en la bitacora: sale siempre de `personas`, que es la
 // unica copia. Por eso todas las lecturas de registros hacen el JOIN.
