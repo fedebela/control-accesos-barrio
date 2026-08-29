@@ -88,7 +88,6 @@ async function createTables() {
       autorizado_por VARCHAR(200),
       autorizacion_medio VARCHAR(20),
       es_entrada BOOLEAN NOT NULL,
-      foto_url TEXT,
       fecha_hora TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -121,7 +120,6 @@ async function createTables() {
   await sql`ALTER TABLE autorizados ADD COLUMN IF NOT EXISTS residente_nombre VARCHAR(200)`;
   await sql`ALTER TABLE autorizados ALTER COLUMN residente_nombre TYPE VARCHAR(200)`;
 
-  await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS foto_url TEXT`;
   await sql`ALTER TABLE registros   ALTER COLUMN residente_nombre TYPE VARCHAR(200)`;
   // Quien habilito el ingreso de una persona sin autorizacion vigente y por que via.
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS autorizacion_medio VARCHAR(20)`;
@@ -135,6 +133,54 @@ async function createTables() {
   await sql`CREATE INDEX IF NOT EXISTS idx_autorizados_dni ON autorizados (dni)`;
 
   await backfillPersonas(sql);
+  await consolidarFotos(sql);
+}
+
+/**
+ * Una sola foto por persona.
+ *
+ * Historicamente cada fila de `registros` guardaba su propia copia en base64,
+ * asi que un ingreso diario multiplicaba la misma imagen. Con ~100 movimientos
+ * por dia eso son cientos de MB al año de datos repetidos.
+ *
+ * La foto vigente vive en `personas`. Esta migracion mueve lo que quedo en la
+ * bitacora y recien despues suelta la columna.
+ *
+ * El orden no es negociable: si se soltara la columna antes de copiar, se
+ * perderian las fotos de las personas que no estuvieran en `personas`.
+ */
+async function consolidarFotos(sql: ReturnType<typeof getSql>) {
+  const existe = (await sql`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'registros' AND column_name = 'foto_url'
+    LIMIT 1
+  `) as any[];
+  if (existe.length === 0) return;
+
+  // 1. Personas que solo existen en la bitacora.
+  await sql`
+    INSERT INTO personas (dni, nombre, apellido, foto_url)
+    SELECT DISTINCT ON (dni) dni, nombre, apellido, foto_url
+    FROM registros
+    ORDER BY dni, fecha_hora DESC
+    ON CONFLICT (dni) DO NOTHING
+  `;
+
+  // 2. Identidades sin foto que si tienen una en algun movimiento.
+  await sql`
+    UPDATE personas p
+    SET foto_url = f.foto_url
+    FROM (
+      SELECT DISTINCT ON (dni) dni, foto_url
+      FROM registros
+      WHERE foto_url IS NOT NULL AND foto_url <> ''
+      ORDER BY dni, fecha_hora DESC
+    ) f
+    WHERE p.dni = f.dni AND (p.foto_url IS NULL OR p.foto_url = '')
+  `;
+
+  // 3. Ya esta todo a salvo en `personas`.
+  await sql`ALTER TABLE registros DROP COLUMN foto_url`;
 }
 
 /**
@@ -142,6 +188,9 @@ async function createTables() {
  * Solo corre si la tabla esta vacia, asi que es seguro llamarla siempre.
  *
  * Prioridad de la identidad: residentes > autorizados > ultimo registro.
+ *
+ * No toca `registros.foto_url` a proposito: esa columna puede no existir
+ * (ya fue consolidada) y de las fotos de la bitacora se ocupa consolidarFotos().
  */
 async function backfillPersonas(sql: ReturnType<typeof getSql>) {
   const yaHay = (await sql`SELECT 1 FROM personas LIMIT 1`) as any[];
@@ -162,25 +211,11 @@ async function backfillPersonas(sql: ReturnType<typeof getSql>) {
   `;
 
   await sql`
-    INSERT INTO personas (dni, nombre, apellido, foto_url)
-    SELECT DISTINCT ON (dni) dni, nombre, apellido, foto_url
+    INSERT INTO personas (dni, nombre, apellido)
+    SELECT DISTINCT ON (dni) dni, nombre, apellido
     FROM registros
     ORDER BY dni, fecha_hora DESC
     ON CONFLICT (dni) DO NOTHING
-  `;
-
-  // Si la identidad quedo sin foto pero en algun movimiento si hubo una,
-  // la recuperamos para no perder fotos ya tomadas.
-  await sql`
-    UPDATE personas p
-    SET foto_url = f.foto_url
-    FROM (
-      SELECT DISTINCT ON (dni) dni, foto_url
-      FROM registros
-      WHERE foto_url IS NOT NULL AND foto_url <> ''
-      ORDER BY dni, fecha_hora DESC
-    ) f
-    WHERE p.dni = f.dni AND (p.foto_url IS NULL OR p.foto_url = '')
   `;
 }
 

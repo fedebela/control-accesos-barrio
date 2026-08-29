@@ -150,7 +150,9 @@ async function upsertPersona(
         nombre = EXCLUDED.nombre,
         apellido = EXCLUDED.apellido,
         foto_url = COALESCE(EXCLUDED.foto_url, personas.foto_url),
-        actualizado_motivo = EXCLUDED.actualizado_motivo,
+        -- Si no viene motivo (por ejemplo, solo se reemplazo la foto),
+        -- se conserva el ultimo motivo registrado.
+        actualizado_motivo = COALESCE(EXCLUDED.actualizado_motivo, personas.actualizado_motivo),
         actualizado_en = CURRENT_TIMESTAMP
     `;
     return;
@@ -781,52 +783,54 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
     }
 
     // ---- Identidad unica por DNI ----
-    // Un DNI tiene un solo nombre, apellido y foto. Si la persona ya existe,
-    // los datos que vengan del formulario se ignoran, salvo que sea una carga
-    // manual con motivo: ahi si se reemplazan y la nueva version pasa a ser
-    // la vigente.
+    // Nombre y apellido quedan fijos: solo cambian por carga manual con motivo.
+    // La foto, en cambio, se puede reemplazar en cualquier momento; siempre
+    // queda la ultima y se descarta la anterior. Una sola foto por persona.
     const personaExistente = await getPersona(sql, dni);
     const puedeModificar = es_manual && Boolean(motivo_manual);
 
     let nombreFinal = nombre;
     let apellidoFinal = apellido;
-    let fotoFinal = foto_url;
     let mensajeIdentidad = "";
 
     if (personaExistente && !puedeModificar) {
       nombreFinal = personaExistente.nombre;
       apellidoFinal = personaExistente.apellido;
-      // La foto guardada manda. Solo se acepta una nueva si no habia ninguna.
-      fotoFinal = personaExistente.foto_url || foto_url;
     }
 
-    if (personaExistente && puedeModificar) {
+    // Si suben una foto nueva, esa pasa a ser la vigente. Si no, se conserva.
+    const fotoFinal = foto_url || personaExistente?.foto_url || "";
+
+    if (personaExistente) {
       const cambioNombre =
-        personaExistente.nombre !== nombre || personaExistente.apellido !== apellido;
+        puedeModificar &&
+        (personaExistente.nombre !== nombre || personaExistente.apellido !== apellido);
       const cambioFoto = Boolean(foto_url) && foto_url !== personaExistente.foto_url;
-      if (cambioNombre || cambioFoto) {
-        mensajeIdentidad = " Se actualizaron los datos de la persona.";
-      }
+
+      if (cambioNombre && cambioFoto) mensajeIdentidad = " Se actualizaron los datos y la foto.";
+      else if (cambioNombre) mensajeIdentidad = " Se actualizaron los datos de la persona.";
+      else if (cambioFoto) mensajeIdentidad = " Se reemplazó la foto de la persona.";
     }
 
     await upsertPersona(
       sql,
       { dni, nombre: nombreFinal, apellido: apellidoFinal, foto_url: fotoFinal },
-      { sobrescribir: puedeModificar, motivo: motivo_manual }
+      // La foto siempre se pisa con la ultima; el nombre solo con motivo.
+      { sobrescribir: puedeModificar || Boolean(foto_url), motivo: motivo_manual }
     );
 
     await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
-                             autorizado_por, autorizacion_medio, es_entrada, foto_url)
+                             autorizado_por, autorizacion_medio, es_entrada)
       VALUES (${nombreFinal}, ${apellidoFinal}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
               ${residente_nombre}, ${lote}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${autorizado_por || null}, ${autorizacion_medio || null}, ${es_entrada}, ${fotoFinal || null})
+              ${autorizado_por || null}, ${autorizacion_medio || null}, ${es_entrada})
     `;
 
-    // La identidad vigente se replica en los maestros para que no queden
+    // El maestro de autorizados replica la identidad vigente para que no queden
     // dos fotos distintas del mismo DNI dando vueltas.
-    if (puedeModificar || fotoFinal) {
+    if (puedeModificar || foto_url) {
       await sql`
         UPDATE autorizados
         SET nombre = ${nombreFinal}, apellido = ${apellidoFinal},
@@ -903,6 +907,8 @@ export async function deleteRegistro(id: number) {
   }
 }
 
+// La foto no se guarda en la bitacora: sale siempre de `personas`, que es la
+// unica copia. Por eso todas las lecturas de registros hacen el JOIN.
 export async function getRegistros(fecha?: string, dni?: string): Promise<Registro[]> {
   try {
     await ensureTables();
@@ -910,20 +916,29 @@ export async function getRegistros(fecha?: string, dni?: string): Promise<Regist
 
     if (dni) {
       return (await sql`
-        SELECT * FROM registros WHERE dni = ${dni} ORDER BY fecha_hora DESC LIMIT 50
+        SELECT r.*, p.foto_url
+        FROM registros r
+        LEFT JOIN personas p ON p.dni = r.dni
+        WHERE r.dni = ${dni}
+        ORDER BY r.fecha_hora DESC LIMIT 50
       `) as unknown as Registro[];
     }
 
     if (fecha) {
       return (await sql`
-        SELECT * FROM registros
-        WHERE fecha_hora::date = ${fecha}::date
-        ORDER BY fecha_hora DESC
+        SELECT r.*, p.foto_url
+        FROM registros r
+        LEFT JOIN personas p ON p.dni = r.dni
+        WHERE r.fecha_hora::date = ${fecha}::date
+        ORDER BY r.fecha_hora DESC
       `) as unknown as Registro[];
     }
 
     return (await sql`
-      SELECT * FROM registros ORDER BY fecha_hora DESC LIMIT 100
+      SELECT r.*, p.foto_url
+      FROM registros r
+      LEFT JOIN personas p ON p.dni = r.dni
+      ORDER BY r.fecha_hora DESC LIMIT 100
     `) as unknown as Registro[];
   } catch (error) {
     console.error("Error al obtener registros:", error);
@@ -936,9 +951,11 @@ export async function getRegistrosHoy(): Promise<Registro[]> {
     await ensureTables();
     const sql = getSql();
     return (await sql`
-      SELECT * FROM registros
-      WHERE fecha_hora::date = CURRENT_DATE
-      ORDER BY fecha_hora DESC
+      SELECT r.*, p.foto_url
+      FROM registros r
+      LEFT JOIN personas p ON p.dni = r.dni
+      WHERE r.fecha_hora::date = CURRENT_DATE
+      ORDER BY r.fecha_hora DESC
     `) as unknown as Registro[];
   } catch (error) {
     console.error("Error al obtener registros de hoy:", error);

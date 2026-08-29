@@ -120,7 +120,6 @@ export default function InformesPage() {
                           <select value={editForm.tipo} onChange={(e) => setEditForm({ ...editForm, tipo: e.target.value })} style={{ ...styles.input, padding: "0.3rem", fontSize: "0.8rem" }}>
                             <option value="visita">Visita</option>
                             <option value="proveedor">Proveedor</option>
-                            <option value="servicio">Servicio</option>
                             <option value="residente">Residente</option>
                           </select>
                         </td>

@@ -354,26 +354,25 @@ export default function HomePage() {
               <h3 style={styles.previewTitle}>Preview</h3>
               <Badge estado={resultado.estado} />
 
-              {form.fotoUrl ? (
-                <>
-                  <img src={form.fotoUrl} alt={`${form.nombre} ${form.apellido}`} style={styles.previewFoto} />
-                  <p style={styles.notaIdentidad}>
-                    Nombre y foto son los registrados para este DNI. Para corregirlos hay que
-                    usar <strong>Carga manual</strong> indicando el motivo.
-                  </p>
-                </>
-              ) : (
-                <div style={styles.faltaFoto}>
-                  <div style={styles.previewDangerBox}>
-                    Esta persona no tiene foto cargada. Sacale una ahora: queda asociada al DNI
-                    para todos los ingresos siguientes.
-                  </div>
-                  <PhotoInput
-                    value={form.fotoUrl}
-                    onChange={(v) => setField("fotoUrl", v)}
-                    label="Foto de la persona"
-                  />
+              {!form.fotoUrl && (
+                <div style={styles.previewDangerBox}>
+                  Esta persona no tiene foto cargada. Sacale una ahora: queda asociada al DNI
+                  para todos los ingresos siguientes.
                 </div>
+              )}
+
+              <PhotoInput
+                value={form.fotoUrl}
+                onChange={(v) => setField("fotoUrl", v)}
+                label={form.fotoUrl ? "Foto de la persona (reemplazable)" : "Foto de la persona"}
+              />
+
+              {form.fotoUrl && (
+                <p style={styles.notaIdentidad}>
+                  Cada DNI tiene una sola foto. Si sacás una nueva, reemplaza a la anterior.
+                  El nombre y el apellido, en cambio, solo se corrigen desde
+                  <strong> Carga manual</strong> con motivo.
+                </p>
               )}
 
               <Row label="Nombre" value={form.nombre} />
@@ -485,9 +484,8 @@ export default function HomePage() {
               <div style={styles.field}>
                 <label style={styles.label}>Tipo</label>
                 <select name="tipo" value={form.tipo} onChange={(e) => setField("tipo", e.target.value)} style={styles.input}>
-                  <option value="visita">Visita</option>
-                  <option value="proveedor">Proveedor</option>
-                  <option value="servicio">Servicio</option>
+                  <option value="visita">Visita — social</option>
+                  <option value="proveedor">Proveedor — laboral</option>
                 </select>
               </div>
             </div>
