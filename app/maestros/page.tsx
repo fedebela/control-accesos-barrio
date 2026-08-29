@@ -4,8 +4,7 @@ import { useActionState, useState, useEffect, useRef } from "react";
 import {
   getResidentes, createResidente, updateResidente, deleteResidente,
   getAutorizados, deleteAutorizado,
-  createInvitacion,
-  searchPersona, promoverAPermanente, revocarAutorizacion,
+  searchPersona, buscarPersonas, autorizarPersonas, revocarAutorizacion,
   type ResultadoBusqueda, type EstadoAutorizacion,
 } from "@/app/actions";
 
@@ -93,14 +92,14 @@ function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: s
 // ---------------------------------------------------------------- Badges
 
 const BADGES: Record<EstadoAutorizacion, { text: string; color: string; bg: string }> = {
-  residente:     { text: "RESIDENTE",                           color: "#166534", bg: "#dcfce7" },
-  permanente:    { text: "AUTORIZADO PERMANENTE",               color: "#166534", bg: "#dcfce7" },
-  temporal:      { text: "AUTORIZADO TEMPORAL",                 color: "#166534", bg: "#dcfce7" },
-  pendiente:     { text: "AUTORIZACIÓN PENDIENTE",              color: "#92400e", bg: "#fef3c7" },
-  usada:         { text: "NO AUTORIZADO · invitación ya usada", color: "#991b1b", bg: "#fee2e2" },
-  vencida:       { text: "NO AUTORIZADO · invitación vencida",  color: "#991b1b", bg: "#fee2e2" },
-  previo:        { text: "NO AUTORIZADO · con registro previo", color: "#991b1b", bg: "#fee2e2" },
-  no_registrado: { text: "NO REGISTRADO",                       color: "#991b1b", bg: "#fee2e2" },
+  residente:     { text: "RESIDENTE",                            color: "#166534", bg: "#dcfce7" },
+  permanente:    { text: "AUTORIZADO PERMANENTE",                color: "#166534", bg: "#dcfce7" },
+  temporal:      { text: "AUTORIZADO TEMPORAL · única vez",      color: "#166534", bg: "#dcfce7" },
+  pendiente:     { text: "AUTORIZACIÓN PENDIENTE",               color: "#92400e", bg: "#fef3c7" },
+  usada:         { text: "NO AUTORIZADO · temporal ya usada",    color: "#991b1b", bg: "#fee2e2" },
+  vencida:       { text: "NO AUTORIZADO · vencida",              color: "#991b1b", bg: "#fee2e2" },
+  previo:        { text: "NO AUTORIZADO",                        color: "#991b1b", bg: "#fee2e2" },
+  no_registrado: { text: "NO REGISTRADO",                        color: "#991b1b", bg: "#fee2e2" },
 };
 
 function Badge({ estado }: { estado: EstadoAutorizacion }) {
@@ -109,16 +108,16 @@ function Badge({ estado }: { estado: EstadoAutorizacion }) {
 }
 
 function estadoDeFila(a: any): EstadoAutorizacion {
-  if (a.tipo === "permanente") return "permanente";
   if (a.usada) return "usada";
   if (!a.autorizado) return "pendiente";
+  if (a.tipo === "permanente") return "permanente";
   return "temporal";
 }
 
 // ---------------------------------------------------------------- Página
 
 export default function MaestrosPage() {
-  const [tab, setTab] = useState<"residentes" | "autorizados" | "invitaciones">("residentes");
+  const [tab, setTab] = useState<"autorizados" | "residentes">("autorizados");
   const [residentes, setResidentes] = useState<any[]>([]);
   const [autorizados, setAutorizados] = useState<any[]>([]);
 
@@ -138,14 +137,243 @@ export default function MaestrosPage() {
       </header>
 
       <div style={styles.tabs}>
+        <button onClick={() => setTab("autorizados")} style={tab === "autorizados" ? styles.tabActive : styles.tabInactive}>Autorizados</button>
         <button onClick={() => setTab("residentes")} style={tab === "residentes" ? styles.tabActive : styles.tabInactive}>Residentes</button>
-        <button onClick={() => setTab("autorizados")} style={tab === "autorizados" ? styles.tabActive : styles.tabInactive}>Autorizados permanentes</button>
-        <button onClick={() => setTab("invitaciones")} style={tab === "invitaciones" ? styles.tabActive : styles.tabInactive}>Invitaciones</button>
       </div>
 
-      {tab === "residentes" && <TabResidentes residentes={residentes} reload={loadData} />}
       {tab === "autorizados" && <TabAutorizados autorizados={autorizados} reload={loadData} />}
-      {tab === "invitaciones" && <TabInvitaciones reload={loadData} />}
+      {tab === "residentes" && <TabResidentes residentes={residentes} reload={loadData} />}
+    </div>
+  );
+}
+
+// ============================ AUTORIZADOS ============================
+
+type EnLista = { dni: string; nombre: string; apellido: string; foto_url: string; lote: string; estado: EstadoAutorizacion };
+
+function TabAutorizados({ autorizados, reload }: { autorizados: any[]; reload: () => Promise<void> }) {
+  const [consulta, setConsulta] = useState("");
+  const [resultados, setResultados] = useState<EnLista[]>([]);
+  const [buscando, setBuscando] = useState(false);
+  const [busco, setBusco] = useState(false);
+
+  const [lista, setLista] = useState<EnLista[]>([]);
+  const [lote, setLote] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  const [tipo, setTipo] = useState<"permanente" | "temporal">("temporal");
+
+  const [detalle, setDetalle] = useState<ResultadoBusqueda | null>(null);
+  const [msg, setMsg] = useState<any>(null);
+  const [estado, action, pending] = useActionState(autorizarPersonas, null);
+
+  useEffect(() => {
+    if (estado?.success) {
+      reload();
+      setLista([]);
+      setObservaciones("");
+      if (consulta.trim()) buscar();
+    }
+  }, [estado]);
+
+  async function buscar() {
+    const q = consulta.trim();
+    if (q.length < 2) return;
+    setBuscando(true);
+    setMsg(null);
+    const r = await buscarPersonas(q);
+    setResultados(r);
+    setBusco(true);
+    setBuscando(false);
+  }
+
+  function agregar(p: EnLista) {
+    setLista((l) => (l.some((x) => x.dni === p.dni) ? l : [...l, p]));
+    if (!lote && p.lote) setLote(p.lote);
+  }
+
+  function quitar(dni: string) {
+    setLista((l) => l.filter((x) => x.dni !== dni));
+  }
+
+  const enLista = (dni: string) => lista.some((x) => x.dni === dni);
+
+  return (
+    <div style={styles.card}>
+      <h2 style={styles.cardTitle}>Autorizados</h2>
+      <p style={styles.helper}>
+        Buscá por <strong>DNI, nombre o apellido</strong> entre las personas que ya ingresaron
+        alguna vez al barrio. Armá una lista y otorgales la autorización de una sola vez.
+      </p>
+
+      <div style={styles.searchRow}>
+        <input
+          value={consulta}
+          onChange={(e) => setConsulta(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); buscar(); } }}
+          placeholder="DNI, nombre o apellido…"
+          style={styles.input}
+        />
+        <button type="button" onClick={buscar} disabled={buscando || consulta.trim().length < 2} style={styles.searchBtn}>
+          {buscando ? "Buscando…" : "Buscar"}
+        </button>
+      </div>
+
+      {estado?.error && <div style={styles.error}>{estado.error}</div>}
+      {estado?.success && <div style={styles.success}>{estado.message}</div>}
+      {msg?.error && <div style={styles.error}>{msg.error}</div>}
+      {msg?.success && <div style={styles.success}>{msg.message}</div>}
+
+      {/* ---- Resultados de la busqueda ---- */}
+      {busco && resultados.length === 0 && (
+        <p style={styles.empty}>
+          No se encontró a nadie con “{consulta}”. Recordá que la persona tiene que haber
+          ingresado al menos una vez para poder autorizarla.
+        </p>
+      )}
+
+      {resultados.length > 0 && (
+        <div style={styles.resultados}>
+          {resultados.map((p) => (
+            <div key={p.dni} style={styles.resultado}>
+              <div style={styles.listMain}>
+                {p.foto_url ? <img src={p.foto_url} alt="" style={styles.thumb} /> : <div style={styles.thumbEmpty}>—</div>}
+                <div>
+                  <strong>{p.apellido}, {p.nombre}</strong>
+                  <Badge estado={p.estado} />
+                  <div style={styles.listMeta}>DNI {p.dni}{p.lote ? ` · Lote ${p.lote}` : ""}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "0.25rem" }}>
+                <button type="button" onClick={() => searchPersona(p.dni).then(setDetalle)} style={styles.editBtn}>Ver</button>
+                {p.estado === "residente" ? (
+                  <span style={styles.notaChica}>No aplica</span>
+                ) : enLista(p.dni) ? (
+                  <button type="button" onClick={() => quitar(p.dni)} style={styles.deleteBtn}>Quitar</button>
+                ) : (
+                  <button type="button" onClick={() => agregar(p)} style={styles.addBtn}>Agregar</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ---- Detalle de una persona ---- */}
+      {detalle?.persona && (
+        <div style={styles.preview}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+            <Badge estado={detalle.estado} />
+            <button type="button" onClick={() => setDetalle(null)} style={styles.cerrarBtn}>Cerrar</button>
+          </div>
+          <div style={styles.previewBody}>
+            {detalle.persona.foto_url
+              ? <img src={detalle.persona.foto_url} alt="" style={styles.previewFoto} />
+              : <div style={styles.previewFotoEmpty}>Sin foto</div>}
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <Row label="Nombre" value={`${detalle.persona.nombre} ${detalle.persona.apellido}`} />
+              <Row label="DNI" value={detalle.persona.dni} />
+              <Row label="Lote" value={detalle.persona.lote} />
+              <Row label="Patente" value={detalle.persona.patente} />
+              {detalle.ultimoRegistro && (
+                <Row
+                  label="Último movimiento"
+                  value={`${new Date(detalle.ultimoRegistro.fecha_hora).toLocaleString("es-AR")} · ${detalle.ultimoRegistro.es_entrada ? "Entrada" : "Salida"}`}
+                />
+              )}
+            </div>
+          </div>
+          {detalle.estado !== "residente" && detalle.autorizado && (
+            <button
+              type="button"
+              style={styles.deleteBtnLg}
+              onClick={async () => {
+                if (!confirm(`¿Revocar la autorización de ${detalle.persona!.nombre} ${detalle.persona!.apellido}?`)) return;
+                const r = await revocarAutorizacion(detalle.persona!.dni);
+                setMsg(r);
+                if (r.success) { await reload(); setDetalle(null); if (consulta.trim()) buscar(); }
+              }}
+            >
+              Revocar autorización
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ---- Lista armada + accion masiva ---- */}
+      {lista.length > 0 && (
+        <form action={action} style={styles.listaBox}>
+          <h3 style={styles.listaTitulo}>Lista para autorizar ({lista.length})</h3>
+
+          {lista.map((p) => (
+            <div key={p.dni} style={styles.listaItem}>
+              <input type="hidden" name="dni" value={p.dni} />
+              <span>
+                <strong>{p.apellido}, {p.nombre}</strong>
+                <span style={styles.listMeta}> · DNI {p.dni}</span>
+              </span>
+              <button type="button" onClick={() => quitar(p.dni)} style={styles.deleteBtn}>Quitar</button>
+            </div>
+          ))}
+
+          <div style={styles.formRow}>
+            <div style={styles.field}>
+              <label style={styles.label}>Tipo de autorización *</label>
+              <select name="tipo" value={tipo} onChange={(e) => setTipo(e.target.value as any)} style={styles.input}>
+                <option value="temporal">Temporal — una sola vez</option>
+                <option value="permanente">Permanente</option>
+              </select>
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>Lote que autoriza *</label>
+              <input name="lote" required value={lote} onChange={(e) => setLote(e.target.value)} style={styles.input} placeholder="Ej: 142" />
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>Observaciones</label>
+              <input name="observaciones" value={observaciones} onChange={(e) => setObservaciones(e.target.value)} style={styles.input} />
+            </div>
+          </div>
+
+          <p style={tipo === "temporal" ? styles.notaTemporal : styles.notaPermanente}>
+            {tipo === "temporal"
+              ? "Al registrarse la entrada, la autorización se consume y la persona vuelve a quedar sin permiso."
+              : "La persona queda habilitada a ingresar indefinidamente, hasta que se revoque."}
+          </p>
+
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <button type="submit" disabled={pending} style={styles.submitBtn}>
+              {pending ? "Otorgando…" : `Autorizar ${lista.length} persona${lista.length > 1 ? "s" : ""}`}
+            </button>
+            <button type="button" onClick={() => setLista([])} style={styles.cancelBtn}>Vaciar lista</button>
+          </div>
+        </form>
+      )}
+
+      {/* ---- Autorizaciones vigentes ---- */}
+      <h3 style={styles.listTitle}>Autorizaciones vigentes ({autorizados.length})</h3>
+      {autorizados.length === 0 && <p style={styles.empty}>Todavía no hay autorizaciones cargadas.</p>}
+      {autorizados.map((a) => (
+        <div key={a.id} style={styles.listItem}>
+          <div style={styles.listMain}>
+            {a.foto_url ? <img src={a.foto_url} alt="" style={styles.thumb} /> : <div style={styles.thumbEmpty}>—</div>}
+            <div>
+              <strong>{a.apellido}, {a.nombre}</strong>
+              <Badge estado={estadoDeFila(a)} />
+              <div style={styles.listMeta}>
+                DNI {a.dni}{a.lote ? ` · Lote ${a.lote}` : ""}{a.patente ? ` · ${a.patente}` : ""}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "0.25rem" }}>
+            <button onClick={() => searchPersona(a.dni).then(setDetalle)} style={styles.editBtn}>Ver</button>
+            <button
+              onClick={async () => { if (confirm(`¿Eliminar la autorización de ${a.nombre} ${a.apellido}?`)) { await deleteAutorizado(a.id); reload(); } }}
+              style={styles.deleteBtn}
+            >
+              Eliminar
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -179,7 +407,10 @@ function TabResidentes({ residentes, reload }: { residentes: any[]; reload: () =
   return (
     <div style={styles.card}>
       <h2 style={styles.cardTitle}>{editR ? "Editar Residente" : "Nuevo Residente"}</h2>
-      <p style={styles.helper}>Personas que viven en el barrio. Siempre tienen ingreso habilitado.</p>
+      <p style={styles.helper}>
+        Personas que viven en el barrio. Siempre tienen ingreso habilitado y son quienes
+        pueden autorizar visitas a su lote.
+      </p>
       {aviso?.error && <div style={styles.error}>{aviso.error}</div>}
       {aviso?.success && <div style={styles.success}>{aviso.message}</div>}
 
@@ -192,7 +423,7 @@ function TabResidentes({ residentes, reload }: { residentes: any[]; reload: () =
         <div style={styles.formRow}>
           <div style={styles.field}><label style={styles.label}>Lote *</label><input name="lote" required defaultValue={editR?.lote || ""} style={styles.input} /></div>
           <div style={styles.field}><label style={styles.label}>DNI *</label><input name="dni" required inputMode="numeric" defaultValue={editR?.dni || ""} style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Teléfono</label><input name="telefono" defaultValue={editR?.telefono || ""} style={styles.input} /></div>
+          <div style={styles.field}><label style={styles.label}>Teléfono</label><input name="telefono" defaultValue={editR?.telefono || ""} style={styles.input} placeholder="549341..." /></div>
         </div>
         <div style={styles.field}>
           <label style={styles.label}>Rol</label>
@@ -231,259 +462,6 @@ function TabResidentes({ residentes, reload }: { residentes: any[]; reload: () =
   );
 }
 
-// ============================ AUTORIZADOS ============================
-
-function TabAutorizados({ autorizados, reload }: { autorizados: any[]; reload: () => Promise<void> }) {
-  const [dni, setDni] = useState("");
-  const [resultado, setResultado] = useState<ResultadoBusqueda | null>(null);
-  const [buscando, setBuscando] = useState(false);
-  const [msg, setMsg] = useState<any>(null);
-  const [estado, action, pending] = useActionState(promoverAPermanente, null);
-
-  useEffect(() => {
-    if (estado?.success) {
-      reload();
-      setResultado(null);
-      setDni("");
-    }
-  }, [estado]);
-
-  async function buscar() {
-    const limpio = dni.trim();
-    if (!limpio) return;
-    setBuscando(true);
-    setMsg(null);
-    const r = await searchPersona(limpio);
-    setResultado(r);
-    setDni(limpio);
-    setBuscando(false);
-  }
-
-  function limpiar() {
-    setDni("");
-    setResultado(null);
-    setMsg(null);
-  }
-
-  const persona = resultado?.persona;
-  const est = resultado?.estado;
-  const puedePromover = Boolean(persona) && est !== "residente" && est !== "permanente";
-
-  return (
-    <div style={styles.card}>
-      <h2 style={styles.cardTitle}>Autorizados permanentes</h2>
-      <p style={styles.helper}>
-        Buscá por DNI para <strong>consultar el estado</strong> de una persona o para
-        <strong> marcarla como autorizada permanente</strong>. Los datos y la foto se toman
-        de lo que quedó grabado en su primer ingreso: no hace falta volver a cargarlos.
-      </p>
-
-      <div style={styles.searchRow}>
-        <input
-          value={dni}
-          onChange={(e) => setDni(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); buscar(); } }}
-          placeholder="Número de DNI…"
-          inputMode="numeric"
-          style={styles.input}
-        />
-        <button type="button" onClick={buscar} disabled={buscando || !dni.trim()} style={styles.searchBtn}>
-          {buscando ? "Buscando…" : "Buscar"}
-        </button>
-        {resultado && <button type="button" onClick={limpiar} style={styles.cancelBtn}>Limpiar</button>}
-      </div>
-
-      {estado?.error && <div style={styles.error}>{estado.error}</div>}
-      {estado?.success && <div style={styles.success}>{estado.message}</div>}
-      {msg?.error && <div style={styles.error}>{msg.error}</div>}
-      {msg?.success && <div style={styles.success}>{msg.message}</div>}
-
-      {/* ---- Sin datos ---- */}
-      {resultado && !persona && (
-        <div style={styles.preview}>
-          <Badge estado="no_registrado" />
-          <p style={styles.previewDanger}>
-            El DNI {dni} no existe en el sistema. Para poder marcarlo como autorizado
-            permanente, primero tiene que registrar un ingreso desde la pantalla principal
-            usando <strong>Carga manual</strong>.
-          </p>
-        </div>
-      )}
-
-      {/* ---- Persona encontrada ---- */}
-      {resultado && persona && (
-        <div style={styles.preview}>
-          <Badge estado={est!} />
-
-          <div style={styles.previewBody}>
-            {persona.foto_url
-              ? <img src={persona.foto_url} alt="" style={styles.previewFoto} />
-              : <div style={styles.previewFotoEmpty}>Sin foto</div>}
-
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <Row label="Nombre" value={`${persona.nombre} ${persona.apellido}`} />
-              <Row label="DNI" value={persona.dni} />
-              <Row label="Tipo" value={persona.tipo} />
-              <Row label="Lote" value={persona.lote} />
-              <Row label="Patente" value={persona.patente} />
-              <Row label="Observaciones" value={persona.observaciones} />
-              {resultado.ultimoRegistro && (
-                <Row
-                  label="Último ingreso"
-                  value={`${new Date(resultado.ultimoRegistro.fecha_hora).toLocaleString("es-AR")} · ${resultado.ultimoRegistro.es_entrada ? "Entrada" : "Salida"}`}
-                />
-              )}
-            </div>
-          </div>
-
-          {est === "residente" && (
-            <p style={styles.previewOk}>Es residente del barrio: ya tiene ingreso permanente.</p>
-          )}
-
-          {est === "permanente" && (
-            <div style={styles.acciones}>
-              <p style={styles.previewOk}>Ya está marcada como autorizada permanente.</p>
-              <button
-                type="button"
-                style={styles.deleteBtnLg}
-                onClick={async () => {
-                  if (!confirm(`¿Quitar la autorización permanente de ${persona.nombre} ${persona.apellido}?`)) return;
-                  const r = await revocarAutorizacion(persona.dni);
-                  setMsg(r);
-                  if (r.success) { await reload(); setResultado(null); setDni(""); }
-                }}
-              >
-                Revocar autorización permanente
-              </button>
-            </div>
-          )}
-
-          {puedePromover && (
-            <form action={action} style={styles.confirmForm}>
-              <input type="hidden" name="dni" value={persona.dni} />
-              <h4 style={styles.confirmTitle}>Marcar como autorizado permanente</h4>
-              {est === "pendiente" || est === "temporal" || est === "usada" || est === "vencida" ? (
-                <p style={styles.previewWarn}>
-                  Tiene una invitación cargada. Al confirmar, se reemplaza por una
-                  autorización permanente.
-                </p>
-              ) : null}
-
-              <div style={styles.formRow}>
-                <div style={styles.field}>
-                  <label style={styles.label}>Lote que autoriza *</label>
-                  <input name="lote" required defaultValue={persona.lote || ""} style={styles.input} placeholder="Ej: 142" />
-                </div>
-                <div style={styles.field}>
-                  <label style={styles.label}>Patente habitual</label>
-                  <input name="patente" defaultValue={persona.patente || ""} style={styles.input} placeholder="Opcional" />
-                </div>
-              </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Observaciones</label>
-                <input name="observaciones" defaultValue={persona.observaciones || ""} style={styles.input} placeholder="Ej: jardinero, viene los martes" />
-              </div>
-
-              <button type="submit" disabled={pending} style={styles.submitBtn}>
-                {pending ? "Guardando…" : "Confirmar autorizado permanente"}
-              </button>
-            </form>
-          )}
-        </div>
-      )}
-
-      <h3 style={styles.listTitle}>Autorizaciones vigentes ({autorizados.length})</h3>
-      {autorizados.length === 0 && <p style={styles.empty}>Todavía no hay autorizaciones cargadas.</p>}
-      {autorizados.map((a) => (
-        <div key={a.id} style={styles.listItem}>
-          <div style={styles.listMain}>
-            {a.foto_url ? <img src={a.foto_url} alt="" style={styles.thumb} /> : <div style={styles.thumbEmpty}>—</div>}
-            <div>
-              <strong>{a.apellido}, {a.nombre}</strong>
-              <Badge estado={estadoDeFila(a)} />
-              <div style={styles.listMeta}>
-                DNI {a.dni}
-                {a.lote ? ` · Lote ${a.lote}` : ""}
-                {a.patente ? ` · ${a.patente}` : ""}
-                {a.residente_nombre ? ` · Invita: ${a.residente_nombre}` : ""}
-              </div>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "0.25rem" }}>
-            <button
-              onClick={() => { setDni(a.dni); searchPersona(a.dni).then(setResultado); }}
-              style={styles.editBtn}
-            >
-              Ver
-            </button>
-            <button
-              onClick={async () => { if (confirm(`¿Eliminar la autorización de ${a.nombre} ${a.apellido}?`)) { await deleteAutorizado(a.id); reload(); } }}
-              style={styles.deleteBtn}
-            >
-              Eliminar
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ============================ INVITACIONES ============================
-
-function TabInvitaciones({ reload }: { reload: () => Promise<void> }) {
-  const [invState, invAction, invPending] = useActionState(createInvitacion, null);
-  const [unSoloUso, setUnSoloUso] = useState(true);
-
-  useEffect(() => { if (invState?.success) reload(); }, [invState]);
-
-  return (
-    <div style={styles.card}>
-      <h2 style={styles.cardTitle}>Nueva Invitación</h2>
-      <p style={styles.helper}>
-        Para visitas puntuales. Generá el link y enviáselo al residente por WhatsApp.
-        La persona queda <strong>PENDIENTE</strong> hasta que el residente confirme.
-      </p>
-      {invState?.error && <div style={styles.error}>{invState.error}</div>}
-      {invState?.success && (
-        <div style={styles.success}>
-          <div>{invState.message}</div>
-          {invState.inviteLink && <div style={styles.linkBox}>{invState.inviteLink}</div>}
-          {invState.whatsappLink && (
-            <a href={invState.whatsappLink} target="_blank" rel="noopener noreferrer" style={styles.whatsappBtn}>
-              Enviar por WhatsApp
-            </a>
-          )}
-        </div>
-      )}
-
-      <form action={invAction} style={styles.form}>
-        <div style={styles.formRow}>
-          <div style={styles.field}><label style={styles.label}>Nombre *</label><input name="nombre" required style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Apellido *</label><input name="apellido" required style={styles.input} /></div>
-        </div>
-        <div style={styles.formRow}>
-          <div style={styles.field}><label style={styles.label}>DNI *</label><input name="dni" required inputMode="numeric" style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Lote *</label><input name="lote" required style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Residente que invita *</label><input name="residente_nombre" required style={styles.input} /></div>
-        </div>
-        <div style={styles.formRow}>
-          <div style={styles.field}><label style={styles.label}>Patente</label><input name="patente" style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Vence el</label><input name="fecha_expiracion" type="date" style={styles.input} /></div>
-          <div style={styles.field}><label style={styles.label}>Observaciones</label><input name="observaciones" style={styles.input} /></div>
-        </div>
-        <label style={styles.checkboxLabel}>
-          <input type="checkbox" name="un_solo_uso" checked={unSoloUso} onChange={(e) => setUnSoloUso(e.target.checked)} />
-          Autorización por <strong>única vez</strong> — se consume al registrar la primera entrada
-        </label>
-        <button type="submit" disabled={invPending} style={styles.submitBtn}>{invPending ? "Creando…" : "Crear Invitación"}</button>
-      </form>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- Auxiliares
-
 function Row({ label, value }: { label: string; value?: string }) {
   return (
     <div style={styles.row}>
@@ -510,34 +488,38 @@ const styles: Record<string, React.CSSProperties> = {
   field: { display: "flex", flexDirection: "column", gap: "0.3rem", flex: 1, minWidth: 150 },
   label: { fontSize: "0.85rem", fontWeight: 700, color: "#374151" },
   input: { padding: "0.75rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", fontSize: "0.95rem", outline: "none", width: "100%", boxSizing: "border-box" },
-  checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" },
 
   searchRow: { display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap" },
   searchBtn: { padding: "0.75rem 1.3rem", borderRadius: "0.75rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+
+  resultados: { display: "flex", flexDirection: "column", gap: "0.4rem", marginBottom: "1.25rem" },
+  resultado: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.75rem", borderRadius: "0.5rem", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.9rem", flexWrap: "wrap" },
+
+  listaBox: { background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1.25rem", display: "flex", flexDirection: "column", gap: "0.6rem" },
+  listaTitulo: { margin: 0, fontSize: "1rem", fontWeight: 800, color: "#166534" },
+  listaItem: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", background: "#fff", border: "1px solid #bbf7d0", borderRadius: "0.5rem", padding: "0.45rem 0.7rem", fontSize: "0.88rem" },
+  notaTemporal: { fontSize: "0.85rem", color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: "0.5rem", padding: "0.5rem 0.7rem", margin: 0, fontWeight: 600 },
+  notaPermanente: { fontSize: "0.85rem", color: "#166534", background: "#dcfce7", border: "1px solid #bbf7d0", borderRadius: "0.5rem", padding: "0.5rem 0.7rem", margin: 0, fontWeight: 600 },
+  notaChica: { fontSize: "0.78rem", color: "#94a3b8", fontStyle: "italic", alignSelf: "center" },
 
   preview: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1.25rem", border: "1px solid #e2e8f0" },
   previewBody: { display: "flex", gap: "1rem", marginTop: "0.75rem", flexWrap: "wrap" },
   previewFoto: { width: 90, height: 90, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0", flexShrink: 0 },
   previewFotoEmpty: { width: 90, height: 90, borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontSize: "0.8rem", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: "1px solid #fecaca" },
-  previewOk: { fontSize: "0.9rem", color: "#166534", fontWeight: 600, marginTop: "0.75rem" },
-  previewWarn: { fontSize: "0.9rem", color: "#92400e", fontWeight: 600, marginBottom: "0.5rem" },
-  previewDanger: { fontSize: "0.9rem", color: "#dc2626", fontWeight: 600, marginTop: "0.75rem", lineHeight: 1.5 },
   row: { display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.25rem 0", fontSize: "0.92rem" },
   rowLabel: { fontWeight: 600, color: "#475569", whiteSpace: "nowrap" },
 
-  acciones: { marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid #e2e8f0" },
-  confirmForm: { display: "flex", flexDirection: "column", gap: "0.7rem", marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #e2e8f0" },
-  confirmTitle: { margin: 0, fontSize: "1rem", fontWeight: 800, color: "#0f172a" },
+  badge: { marginLeft: "0.5rem", padding: "0.15rem 0.6rem", borderRadius: "999px", fontSize: "0.7rem", fontWeight: 700, display: "inline-block", verticalAlign: "middle" },
 
-  badge: { marginLeft: "0.5rem", padding: "0.15rem 0.6rem", borderRadius: "999px", fontSize: "0.72rem", fontWeight: 700, display: "inline-block", verticalAlign: "middle" },
-
-  submitBtn: { padding: "0.85rem 1.2rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #16a34a, #22c55e)", color: "#fff", fontWeight: 800, cursor: "pointer", alignSelf: "flex-start" },
+  submitBtn: { padding: "0.85rem 1.2rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #16a34a, #22c55e)", color: "#fff", fontWeight: 800, cursor: "pointer" },
   cancelBtn: { padding: "0.75rem 1.2rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", background: "#f8fafc", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  cerrarBtn: { padding: "0.3rem 0.7rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#fff", color: "#475569", fontWeight: 700, fontSize: "0.78rem", cursor: "pointer" },
   miniBtn: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" },
   miniBtnDanger: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", cursor: "pointer" },
+  addBtn: { padding: "0.35rem 0.8rem", borderRadius: "0.5rem", border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer" },
   editBtn: { padding: "0.35rem 0.7rem", borderRadius: "0.5rem", border: "1px solid #fde68a", background: "#fefce8", color: "#a16207", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" },
   deleteBtn: { padding: "0.35rem 0.7rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer" },
-  deleteBtnLg: { padding: "0.7rem 1.1rem", borderRadius: "0.75rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", fontWeight: 700, fontSize: "0.9rem", cursor: "pointer" },
+  deleteBtnLg: { marginTop: "0.75rem", padding: "0.7rem 1.1rem", borderRadius: "0.75rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", fontWeight: 700, fontSize: "0.9rem", cursor: "pointer" },
 
   error: { padding: "0.7rem", borderRadius: "0.75rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, marginBottom: "0.75rem" },
   success: { padding: "0.7rem", borderRadius: "0.75rem", background: "#ecfdf5", color: "#059669", fontWeight: 600, marginBottom: "0.75rem" },
@@ -548,8 +530,5 @@ const styles: Record<string, React.CSSProperties> = {
   listMeta: { fontSize: "0.8rem", color: "#64748b", marginTop: "0.15rem" },
   thumb: { width: 40, height: 40, borderRadius: "0.35rem", objectFit: "cover", flexShrink: 0 },
   thumbEmpty: { width: 40, height: 40, borderRadius: "0.35rem", background: "#e2e8f0", color: "#94a3b8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-
-  whatsappBtn: { display: "inline-block", marginTop: "0.5rem", padding: "0.5rem 1rem", borderRadius: "0.5rem", background: "#25d366", color: "#fff", fontWeight: 700, textDecoration: "none" },
-  linkBox: { marginTop: "0.5rem", padding: "0.5rem", background: "#f1f5f9", borderRadius: "0.5rem", fontSize: "0.8rem", color: "#334155", wordBreak: "break-all", fontWeight: 400 },
   empty: { color: "#94a3b8", fontStyle: "italic" },
 };
