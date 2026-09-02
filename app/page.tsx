@@ -2,7 +2,7 @@
 
 import { useActionState, useState, useRef, useEffect, useCallback } from "react";
 import {
-  searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores,
+  searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores, getUltimoOperadorUsado,
   type ResultadoBusqueda, type EstadoAutorizacion, type Operador,
 } from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
@@ -144,13 +144,18 @@ export default function HomePage() {
 
   const setField = (k: keyof typeof FORM_VACIO, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  // ---- Operadores: el principal viene preseleccionado ----
+  // ---- Operadores ----
+  // Viene preseleccionado el ultimo que registro un movimiento: al cambiar el
+  // turno, con el primer registro del operador entrante el desplegable ya queda
+  // apuntando a el para todos los siguientes.
   useEffect(() => {
-    getOperadores().then((ops) => {
+    Promise.all([getOperadores(), getUltimoOperadorUsado()]).then(([ops, ultimoId]) => {
       const activos = ops.filter((o) => o.activo);
       setOperadores(activos);
-      const principal = activos.find((o) => o.principal) || activos[0];
-      if (principal) setOperadorId(String(principal.id));
+
+      const sugerido =
+        activos.find((o) => o.id === ultimoId) || activos[0];
+      if (sugerido) setOperadorId(String(sugerido.id));
     });
   }, [refreshKey]);
 
@@ -313,9 +318,7 @@ export default function HomePage() {
           ) : (
             <select value={operadorId} onChange={(e) => setOperadorId(e.target.value)} style={styles.input}>
               {operadores.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.apellido}, {o.nombre}{o.principal ? " (principal)" : ""}
-                </option>
+                <option key={o.id} value={o.id}>{o.apellido}, {o.nombre}</option>
               ))}
             </select>
           )}

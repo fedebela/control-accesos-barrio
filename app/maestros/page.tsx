@@ -5,10 +5,10 @@ import {
   getResidentes, createResidente, updateResidente, deleteResidente,
   getAutorizados, deleteAutorizado,
   searchPersona, buscarPersonas, autorizarPersonas, revocarAutorizacion,
-  getOperadores, createOperador, updateOperador, deleteOperador, setOperadorPrincipal,
+  getOperadores, createOperador, updateOperador, deleteOperador,
   type ResultadoBusqueda, type EstadoAutorizacion,
 } from "@/app/actions";
-import { TURNOS, ROLES_OPERADOR, etiquetaTurno, etiquetaRolOperador } from "@/lib/constantes";
+import { TURNOS, etiquetaTurno } from "@/lib/constantes";
 
 // ---------------------------------------------------------------- PhotoInput
 
@@ -176,24 +176,19 @@ function TabOperadores({ operadores, reload }: { operadores: any[]; reload: () =
   }
 
   const aviso = msg || opState;
-  const hayPrincipal = operadores.some((o) => o.principal && o.activo);
 
   return (
     <div style={styles.card}>
       <h2 style={styles.cardTitle}>{edit ? "Editar Operador" : "Nuevo Operador"}</h2>
       <p style={styles.helper}>
         Vigiladores y personal que opera la guardia. Cada entrada y salida queda firmada
-        por quien la registró. El marcado como <strong>principal</strong> viene
-        preseleccionado en la pantalla de accesos.
+        por quien la registró. En la pantalla de accesos viene preseleccionado el
+        <strong> último que registró un movimiento</strong>, así al cambiar el turno se
+        ajusta solo con el primer registro.
       </p>
 
       {aviso?.error && <div style={styles.error}>{aviso.error}</div>}
       {aviso?.success && <div style={styles.success}>{aviso.message}</div>}
-      {!hayPrincipal && operadores.length > 0 && (
-        <div style={styles.avisoSuave}>
-          Ninguno está marcado como principal. Marcá uno para que venga preseleccionado.
-        </div>
-      )}
 
       <form key={edit?.id ?? "nuevo"} action={submit} style={styles.form}>
         <div style={styles.formRow}>
@@ -201,25 +196,13 @@ function TabOperadores({ operadores, reload }: { operadores: any[]; reload: () =
           <div style={styles.field}><label style={styles.label}>Apellido *</label><input name="apellido" required defaultValue={edit?.apellido || ""} style={styles.input} /></div>
           <div style={styles.field}><label style={styles.label}>DNI *</label><input name="dni" required inputMode="numeric" defaultValue={edit?.dni || ""} style={styles.input} /></div>
         </div>
-        <div style={styles.formRow}>
-          <div style={styles.field}>
-            <label style={styles.label}>Turno</label>
-            <select name="turno" defaultValue={edit?.turno || ""} style={styles.input}>
-              <option value="">Sin especificar</option>
-              {TURNOS.map((t) => <option key={t.valor} value={t.valor}>{t.etiqueta}</option>)}
-            </select>
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Rol</label>
-            <select name="rol" defaultValue={edit?.rol || "vigilador"} style={styles.input}>
-              {ROLES_OPERADOR.map((r) => <option key={r.valor} value={r.valor}>{r.etiqueta}</option>)}
-            </select>
-          </div>
+        <div style={styles.field}>
+          <label style={styles.label}>Turno</label>
+          <select name="turno" defaultValue={edit?.turno || ""} style={styles.input}>
+            <option value="">Sin especificar</option>
+            {TURNOS.map((t) => <option key={t.valor} value={t.valor}>{t.etiqueta}</option>)}
+          </select>
         </div>
-        <label style={styles.checkboxLabel}>
-          <input type="checkbox" name="principal" defaultChecked={edit ? edit.principal : operadores.length === 0} />
-          Marcar como <strong>principal</strong> — viene preseleccionado al registrar
-        </label>
         {edit && (
           <label style={styles.checkboxLabel}>
             <input type="checkbox" name="activo" value="true" defaultChecked={edit.activo} />
@@ -246,23 +229,14 @@ function TabOperadores({ operadores, reload }: { operadores: any[]; reload: () =
           <div style={styles.listMain}>
             <div>
               <strong>{o.apellido}, {o.nombre}</strong>
-              {o.principal && o.activo && <span style={{ ...styles.badge, background: "#dcfce7", color: "#166534" }}>PRINCIPAL</span>}
               {!o.activo && <span style={{ ...styles.badge, background: "#fee2e2", color: "#991b1b" }}>INACTIVO</span>}
               <div style={styles.listMeta}>
-                DNI {o.dni} · {etiquetaRolOperador(o.rol)}
+                DNI {o.dni}
                 {o.turno ? ` · Turno ${etiquetaTurno(o.turno)}` : ""}
               </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
-            {!o.principal && o.activo && (
-              <button
-                onClick={async () => { const r = await setOperadorPrincipal(o.id); setMsg(r); reload(); }}
-                style={styles.addBtn}
-              >
-                Hacer principal
-              </button>
-            )}
             <button onClick={() => editar(o)} style={styles.editBtn}>Editar</button>
             {o.activo && (
               <button
@@ -648,7 +622,6 @@ const styles: Record<string, React.CSSProperties> = {
 
   badge: { marginLeft: "0.5rem", padding: "0.15rem 0.6rem", borderRadius: "999px", fontSize: "0.7rem", fontWeight: 700, display: "inline-block", verticalAlign: "middle" },
   checkboxLabel: { fontSize: "0.9rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" },
-  avisoSuave: { padding: "0.6rem 0.8rem", borderRadius: "0.6rem", background: "#fffbeb", border: "1px solid #fcd34d", color: "#92400e", fontSize: "0.85rem", fontWeight: 600, marginBottom: "0.75rem" },
 
   submitBtn: { padding: "0.85rem 1.2rem", borderRadius: "0.75rem", border: "none", background: "linear-gradient(90deg, #16a34a, #22c55e)", color: "#fff", fontWeight: 800, cursor: "pointer" },
   cancelBtn: { padding: "0.75rem 1.2rem", borderRadius: "0.75rem", border: "1px solid #d1d5db", background: "#f8fafc", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },

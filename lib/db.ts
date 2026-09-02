@@ -112,6 +112,12 @@ async function createTables() {
   // ---------- OPERADORES ----------
   // Vigiladores y personal que opera la guardia. Cada movimiento queda firmado
   // por quien lo registro. El marcado como principal viene preseleccionado.
+  //
+  // Sin rol a proposito: los permisos son un asunto de la autenticacion y van
+  // a vivir en la tabla de usuarios. Aca solo interesa quien esta de turno.
+  //
+  // Tampoco hay un operador "principal": la pantalla de accesos precarga al
+  // ultimo que registro un movimiento, que se ajusta solo al cambiar el turno.
   await sql`
     CREATE TABLE IF NOT EXISTS operadores (
       id BIGSERIAL PRIMARY KEY,
@@ -119,8 +125,6 @@ async function createTables() {
       apellido VARCHAR(100) NOT NULL,
       dni VARCHAR(20) NOT NULL UNIQUE,
       turno VARCHAR(20),
-      rol VARCHAR(30) DEFAULT 'vigilador',
-      principal BOOLEAN DEFAULT FALSE,
       activo BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
@@ -166,10 +170,16 @@ async function createTables() {
   await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_lote ON registro_lotes (lote)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_tipo ON registros (tipo)`;
 
-  // Solo un operador puede estar marcado como principal.
+  // El rol del operador se elimino: los permisos son de la capa de usuarios.
+  await sql`ALTER TABLE operadores DROP COLUMN IF EXISTS rol`;
+  // El operador principal se reemplazo por "el ultimo que registro".
+  await sql`DROP INDEX IF EXISTS idx_operadores_principal`;
+  await sql`ALTER TABLE operadores DROP COLUMN IF EXISTS principal`;
+
+  // Para resolver rapido cual fue el ultimo operador que registro un movimiento.
   await sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_operadores_principal
-    ON operadores (principal) WHERE principal = TRUE
+    CREATE INDEX IF NOT EXISTS idx_registros_operador
+    ON registros (operador_id, fecha_hora DESC)
   `;
 
   // ---------- INDICES ----------

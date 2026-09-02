@@ -28,12 +28,6 @@ export const TURNOS = [
   { valor: "rotativo", etiqueta: "Rotativo" },
 ] as const;
 
-export const ROLES_OPERADOR = [
-  { valor: "vigilador", etiqueta: "Vigilador" },
-  { valor: "supervisor", etiqueta: "Supervisor" },
-  { valor: "administracion", etiqueta: "Administración" },
-] as const;
-
 export const MEDIOS_AUTORIZACION = [
   { valor: "whatsapp", etiqueta: "WhatsApp" },
   { valor: "telefono", etiqueta: "Teléfono" },
@@ -48,5 +42,4 @@ function buscarEtiqueta(lista: readonly { valor: string; etiqueta: string }[], v
 export const etiquetaTipo = (v?: string) => buscarEtiqueta(TIPOS, v);
 export const etiquetaRubro = (v?: string) => buscarEtiqueta(RUBROS_PROVEEDOR, v);
 export const etiquetaTurno = (v?: string) => buscarEtiqueta(TURNOS, v);
-export const etiquetaRolOperador = (v?: string) => buscarEtiqueta(ROLES_OPERADOR, v);
 export const etiquetaMedio = (v?: string) => buscarEtiqueta(MEDIOS_AUTORIZACION, v);

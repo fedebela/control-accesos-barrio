@@ -180,8 +180,6 @@ export type Operador = {
   apellido: string;
   dni: string;
   turno: string;
-  rol: string;
-  principal: boolean;
   activo: boolean;
 };
 
@@ -190,13 +188,40 @@ export async function getOperadores(): Promise<Operador[]> {
     await ensureTables();
     const sql = getSql();
     return (await sql`
-      SELECT id, nombre, apellido, dni, turno, rol, principal, activo
+      SELECT id, nombre, apellido, dni, turno, activo
       FROM operadores
-      ORDER BY principal DESC, activo DESC, apellido, nombre
+      ORDER BY activo DESC, apellido, nombre
     `) as unknown as Operador[];
   } catch (error) {
     console.error("Error al obtener operadores:", error);
     return [];
+  }
+}
+
+/**
+ * Ultimo operador que registro una entrada o una salida.
+ *
+ * Es lo que se precarga en la pantalla de accesos: al cambiar el turno, el
+ * primer movimiento que carga el operador entrante deja el desplegable
+ * apuntando a el para todos los siguientes, sin tener que configurar nada.
+ *
+ * Devuelve null si nunca se registro nada o si ese operador ya no esta activo.
+ */
+export async function getUltimoOperadorUsado(): Promise<number | null> {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const filas = (await sql`
+      SELECT r.operador_id
+      FROM registros r
+      JOIN operadores o ON o.id = r.operador_id
+      WHERE r.operador_id IS NOT NULL AND o.activo = TRUE
+      ORDER BY r.fecha_hora DESC
+      LIMIT 1
+    `) as any[];
+    return filas[0]?.operador_id ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -205,8 +230,6 @@ export async function createOperador(prevState: any, formData: FormData) {
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
   const turno = String(formData.get("turno") || "").trim();
-  const rol = String(formData.get("rol") || "vigilador").trim();
-  const principal = formData.get("principal") === "on" || formData.get("principal") === "true";
 
   if (!nombre || !apellido || !dni) {
     return { error: "Nombre, apellido y DNI son obligatorios." };
@@ -221,14 +244,9 @@ export async function createOperador(prevState: any, formData: FormData) {
       return { error: `Ya hay un operador cargado con el DNI ${dni}.` };
     }
 
-    // Solo puede haber un principal.
-    if (principal) {
-      await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE`;
-    }
-
     await sql`
-      INSERT INTO operadores (nombre, apellido, dni, turno, rol, principal, activo)
-      VALUES (${nombre}, ${apellido}, ${dni}, ${turno || null}, ${rol}, ${principal}, TRUE)
+      INSERT INTO operadores (nombre, apellido, dni, turno, activo)
+      VALUES (${nombre}, ${apellido}, ${dni}, ${turno || null}, TRUE)
     `;
 
     revalidatePath("/maestros");
@@ -244,8 +262,6 @@ export async function updateOperador(id: number, prevState: any, formData: FormD
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
   const turno = String(formData.get("turno") || "").trim();
-  const rol = String(formData.get("rol") || "vigilador").trim();
-  const principal = formData.get("principal") === "on" || formData.get("principal") === "true";
   const activo = formData.get("activo") !== "false";
 
   if (!nombre || !apellido || !dni) {
@@ -263,13 +279,9 @@ export async function updateOperador(id: number, prevState: any, formData: FormD
       return { error: `Ya hay otro operador con el DNI ${dni}.` };
     }
 
-    if (principal) {
-      await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE AND id <> ${id}`;
-    }
-
     await sql`
       UPDATE operadores SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
-        turno=${turno || null}, rol=${rol}, principal=${principal}, activo=${activo}
+        turno=${turno || null}, activo=${activo}
       WHERE id = ${id}
     `;
 
@@ -281,27 +293,12 @@ export async function updateOperador(id: number, prevState: any, formData: FormD
   }
 }
 
-/** Marca un operador como principal para que venga preseleccionado. */
-export async function setOperadorPrincipal(id: number) {
-  try {
-    await ensureTables();
-    const sql = getSql();
-    await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE`;
-    await sql`UPDATE operadores SET principal = TRUE, activo = TRUE WHERE id = ${id}`;
-    revalidatePath("/maestros");
-    revalidatePath("/");
-    return { success: true, message: "Operador marcado como principal." };
-  } catch (error: any) {
-    return { error: error.message };
-  }
-}
-
 export async function deleteOperador(id: number) {
   try {
     await ensureTables();
     const sql = getSql();
     // No se borra: los movimientos ya registrados lo referencian. Se desactiva.
-    await sql`UPDATE operadores SET activo = FALSE, principal = FALSE WHERE id = ${id}`;
+    await sql`UPDATE operadores SET activo = FALSE WHERE id = ${id}`;
     revalidatePath("/maestros");
     revalidatePath("/");
     return { success: true, message: "Operador dado de baja." };
