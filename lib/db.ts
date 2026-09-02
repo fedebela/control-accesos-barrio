@@ -109,6 +109,36 @@ async function createTables() {
     );
   `;
 
+  // ---------- OPERADORES ----------
+  // Vigiladores y personal que opera la guardia. Cada movimiento queda firmado
+  // por quien lo registro. El marcado como principal viene preseleccionado.
+  await sql`
+    CREATE TABLE IF NOT EXISTS operadores (
+      id BIGSERIAL PRIMARY KEY,
+      nombre VARCHAR(100) NOT NULL,
+      apellido VARCHAR(100) NOT NULL,
+      dni VARCHAR(20) NOT NULL UNIQUE,
+      turno VARCHAR(20),
+      rol VARCHAR(30) DEFAULT 'vigilador',
+      principal BOOLEAN DEFAULT FALSE,
+      activo BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  // ---------- REGISTRO_LOTES ----------
+  // Un proveedor puede anunciarse para varios lotes en un mismo ingreso.
+  // El movimiento sigue siendo UNA fila en `registros`; los lotes van aca.
+  // registros.lote_destino conserva el primero de la lista para que las
+  // consultas simples y los filtros por lote sigan funcionando.
+  await sql`
+    CREATE TABLE IF NOT EXISTS registro_lotes (
+      id BIGSERIAL PRIMARY KEY,
+      registro_id BIGINT NOT NULL REFERENCES registros(id) ON DELETE CASCADE,
+      lote VARCHAR(20) NOT NULL
+    );
+  `;
+
   // ---------- MIGRACIONES ----------
   // Se ejecutan DESPUES de crear las tablas, si no fallan en una base vacia.
   await sql`ALTER TABLE residentes  ADD COLUMN IF NOT EXISTS rol VARCHAR(20) DEFAULT 'propietario'`;
@@ -125,7 +155,22 @@ async function createTables() {
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS autorizacion_medio VARCHAR(20)`;
   await sql`ALTER TABLE registros   ALTER COLUMN autorizado_por TYPE VARCHAR(200)`;
 
+  // Operador que registro el movimiento. Se guarda el id y una copia del nombre:
+  // la bitacora es inalterable, asi que debe conservar como se llamaba en ese
+  // momento aunque despues se edite o se borre el operador.
+  await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS operador_id BIGINT`;
+  await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS operador_nombre VARCHAR(200)`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_residentes_lote ON residentes (lote)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_reg ON registro_lotes (registro_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_lote ON registro_lotes (lote)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_registros_tipo ON registros (tipo)`;
+
+  // Solo un operador puede estar marcado como principal.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_operadores_principal
+    ON operadores (principal) WHERE principal = TRUE
+  `;
 
   // ---------- INDICES ----------
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_dni_fecha ON registros (dni, fecha_hora DESC)`;
@@ -134,6 +179,23 @@ async function createTables() {
 
   await backfillPersonas(sql);
   await consolidarFotos(sql);
+  await backfillRegistroLotes(sql);
+}
+
+/**
+ * Lleva a `registro_lotes` los lotes de los movimientos ya existentes, para que
+ * el historico tambien se pueda consultar por lote. Corre una sola vez.
+ */
+async function backfillRegistroLotes(sql: ReturnType<typeof getSql>) {
+  const yaHay = (await sql`SELECT 1 FROM registro_lotes LIMIT 1`) as any[];
+  if (yaHay.length > 0) return;
+
+  await sql`
+    INSERT INTO registro_lotes (registro_id, lote)
+    SELECT id, lote_destino
+    FROM registros
+    WHERE lote_destino IS NOT NULL AND lote_destino <> ''
+  `;
 }
 
 /**

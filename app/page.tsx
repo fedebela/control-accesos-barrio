@@ -1,8 +1,12 @@
 "use client";
 
 import { useActionState, useState, useRef, useEffect, useCallback } from "react";
-import { searchPersona, registrarMovimiento, getResidentesDeLote, type ResultadoBusqueda, type EstadoAutorizacion } from "@/app/actions";
+import {
+  searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores,
+  type ResultadoBusqueda, type EstadoAutorizacion, type Operador,
+} from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
+import { TIPOS, RUBROS_PROVEEDOR, MEDIOS_AUTORIZACION, etiquetaRubro } from "@/lib/constantes";
 
 // ---------------------------------------------------------------- PhotoInput
 
@@ -85,16 +89,16 @@ function PhotoInput({ value, onChange, label }: { value: string; onChange: (v: s
   );
 }
 
-// ---------------------------------------------------------------- Badge
+// ---------------------------------------------------------------- Badges
 
 const BADGES: Record<EstadoAutorizacion, { text: string; color: string; bg: string }> = {
   residente:     { text: "RESIDENTE",                            color: "#166534", bg: "#dcfce7" },
   permanente:    { text: "AUTORIZADO PERMANENTE",                color: "#166534", bg: "#dcfce7" },
-  temporal:      { text: "AUTORIZADO TEMPORAL",                  color: "#166534", bg: "#dcfce7" },
+  temporal:      { text: "AUTORIZADO TEMPORAL · única vez",      color: "#166534", bg: "#dcfce7" },
   pendiente:     { text: "AUTORIZACIÓN PENDIENTE",               color: "#92400e", bg: "#fef3c7" },
-  usada:         { text: "NO AUTORIZADO · invitación ya usada",  color: "#991b1b", bg: "#fee2e2" },
-  vencida:       { text: "NO AUTORIZADO · invitación vencida",   color: "#991b1b", bg: "#fee2e2" },
-  previo:        { text: "NO AUTORIZADO · con registro previo",  color: "#991b1b", bg: "#fee2e2" },
+  usada:         { text: "NO AUTORIZADO · temporal ya usada",    color: "#991b1b", bg: "#fee2e2" },
+  vencida:       { text: "NO AUTORIZADO · vencida",              color: "#991b1b", bg: "#fee2e2" },
+  previo:        { text: "NO AUTORIZADO",                        color: "#991b1b", bg: "#fee2e2" },
   no_registrado: { text: "NO REGISTRADO",                        color: "#991b1b", bg: "#fee2e2" },
 };
 
@@ -110,8 +114,8 @@ function Badge({ estado }: { estado: EstadoAutorizacion }) {
 // ---------------------------------------------------------------- Página
 
 const FORM_VACIO = {
-  nombre: "", apellido: "", dni: "", tipo: "visita",
-  lote: "", patente: "", vehiculo: "", residenteNombre: "",
+  nombre: "", apellido: "", dni: "", tipo: "visita", subtipo: "",
+  patente: "", vehiculo: "", residenteNombre: "",
   observaciones: "", fotoUrl: "",
 };
 
@@ -129,11 +133,26 @@ export default function HomePage() {
   const [authMedio, setAuthMedio] = useState("");
   const [estado, action, pending] = useActionState(registrarMovimiento, null);
 
+  const [form, setForm] = useState({ ...FORM_VACIO });
+  const [lotes, setLotes] = useState<string[]>([]);
+
+  const [operadores, setOperadores] = useState<Operador[]>([]);
+  const [operadorId, setOperadorId] = useState("");
+
   const inputRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
-  const [form, setForm] = useState({ ...FORM_VACIO });
   const setField = (k: keyof typeof FORM_VACIO, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  // ---- Operadores: el principal viene preseleccionado ----
+  useEffect(() => {
+    getOperadores().then((ops) => {
+      const activos = ops.filter((o) => o.activo);
+      setOperadores(activos);
+      const principal = activos.find((o) => o.principal) || activos[0];
+      if (principal) setOperadorId(String(principal.id));
+    });
+  }, [refreshKey]);
 
   const limpiarTodo = useCallback(() => {
     setDniInput("");
@@ -145,6 +164,7 @@ export default function HomePage() {
     setAuthQuien("");
     setAuthMedio("");
     setForm({ ...FORM_VACIO });
+    setLotes([]);
     if (scanRef.current) { scanRef.current.value = ""; scanRef.current.focus(); }
   }, []);
 
@@ -182,38 +202,39 @@ export default function HomePage() {
     setDniInput(limpio);
 
     if (!r.persona) {
-      // Si el escaneo trajo nombre y apellido, abrimos la carga manual
-      // ya completada: solo falta la foto y el lote.
       if (datos?.completo) {
         setManualMode(true);
-        setForm({
-          ...FORM_VACIO,
-          dni: datos.dni,
-          nombre: datos.nombre,
-          apellido: datos.apellido,
-        });
+        setForm({ ...FORM_VACIO, dni: datos.dni, nombre: datos.nombre, apellido: datos.apellido });
       } else {
         setForm({ ...FORM_VACIO, dni: limpio });
       }
+      setLotes([]);
       return;
     }
 
-    // En salida se prellenan los datos de la ULTIMA ENTRADA.
-    // En entrada se usan los datos del maestro + ultimo movimiento.
     const base = mode === "salida" ? r.ultimaEntrada : r.ultimoRegistro;
 
     setForm({
       nombre: r.persona.nombre,
       apellido: r.persona.apellido,
       dni: r.persona.dni,
-      tipo: r.persona.tipo || "visita",
-      lote: base?.lote_destino || r.persona.lote || "",
+      tipo: r.persona.tipo === "residente" ? "visita" : r.persona.tipo || "visita",
+      subtipo: r.subtipoPrevio || "",
       patente: base?.patente || r.persona.patente || "",
       vehiculo: base?.vehiculo_tipo === "si" || base?.patente ? "si" : r.persona.patente ? "si" : "no",
       residenteNombre: r.persona.residente_nombre || "",
       observaciones: mode === "salida" ? base?.observaciones || "" : "",
-      fotoUrl: r.persona.foto_url || base?.foto_url || "",
+      fotoUrl: r.persona.foto_url || "",
     });
+
+    // Los lotes de la ultima entrada vienen precargados y se pueden modificar.
+    // En la salida son los lotes por los que la persona entro.
+    const previos = r.lotesUltimaEntrada.length
+      ? r.lotesUltimaEntrada
+      : r.persona.lote
+        ? [r.persona.lote]
+        : [];
+    setLotes(previos);
   };
 
   const activarManual = (checked: boolean) => {
@@ -222,11 +243,10 @@ export default function HomePage() {
 
     if (!checked) {
       setForm({ ...FORM_VACIO });
+      setLotes([]);
       return;
     }
 
-    // Si ya se busco el DNI, la carga manual arranca con la identidad vigente
-    // para poder corregirla; si no, arranca vacia.
     const p = resultado?.persona;
     setForm({
       ...FORM_VACIO,
@@ -237,21 +257,32 @@ export default function HomePage() {
     });
   };
 
-  const labelLote = mode === "salida" ? "Lote desde donde se retira *" : "Lote que autoriza el ingreso *";
+  const operadorSel = operadores.find((o) => String(o.id) === operadorId);
+  const labelLote = mode === "salida" ? "Lotes desde donde se retira" : "Lotes que autorizan el ingreso";
   const textoBoton = mode === "entrada" ? "Registrar Entrada" : "Registrar Salida";
   const hayPersona = Boolean(resultado?.persona);
   const noRegistrado = Boolean(resultado && !resultado.persona);
 
-  // Una entrada sin autorizacion vigente exige lote, quien autorizo y por que medio.
-  // En una salida no aplica: si la persona esta adentro, tiene que poder salir.
-  // En carga manual siempre se pide, salvo que la busqueda haya dado autorizada:
-  // una persona que se carga por primera vez nunca tiene permiso previo.
   const necesitaAutorizacion =
-    mode === "entrada" &&
-    !resultado?.autorizado &&
-    (Boolean(resultado) || manualMode);
-  const autorizacionCompleta = Boolean(authQuien.trim() && authMedio && form.lote.trim());
-  const bloqueado = necesitaAutorizacion && !autorizacionCompleta;
+    mode === "entrada" && !resultado?.autorizado && (Boolean(resultado) || manualMode);
+  const autorizacionCompleta = Boolean(authQuien.trim() && authMedio && lotes.length > 0);
+  const faltaRubro = form.tipo === "proveedor" && !form.subtipo;
+  const bloqueado =
+    (necesitaAutorizacion && !autorizacionCompleta) ||
+    lotes.length === 0 ||
+    faltaRubro ||
+    !operadorId;
+
+  // Campos comunes a los dos formularios.
+  const camposComunes = (
+    <>
+      {lotes.map((l) => (
+        <input key={l} type="hidden" name="lote_destino" value={l} />
+      ))}
+      <input type="hidden" name="operador_id" value={operadorId} />
+      <input type="hidden" name="operador_nombre" value={operadorSel ? `${operadorSel.nombre} ${operadorSel.apellido}` : ""} />
+    </>
+  );
 
   return (
     <div style={styles.container}>
@@ -271,7 +302,26 @@ export default function HomePage() {
       <div style={styles.card}>
         <h2 style={styles.cardTitle}>{mode === "entrada" ? "Registrar Entrada" : "Registrar Salida"}</h2>
 
-        {/* ---------------- Bloque de busqueda (siempre visible) ---------------- */}
+        {/* ---------------- Operador que registra ---------------- */}
+        <div style={styles.operadorBox}>
+          <label style={styles.label}>Registra *</label>
+          {operadores.length === 0 ? (
+            <p style={styles.operadorFalta}>
+              No hay operadores cargados. Andá a <a href="/maestros" style={styles.navLink}>Maestros → Operadores</a> y
+              cargá al menos uno para poder registrar movimientos.
+            </p>
+          ) : (
+            <select value={operadorId} onChange={(e) => setOperadorId(e.target.value)} style={styles.input}>
+              {operadores.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.apellido}, {o.nombre}{o.principal ? " (principal)" : ""}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* ---------------- Busqueda ---------------- */}
         <div style={styles.inputGroup}>
           <div>
             <label style={styles.label}>Escanear DNI</label>
@@ -281,7 +331,6 @@ export default function HomePage() {
               placeholder="Escanear el código del DNI…"
               autoComplete="off"
               onKeyDown={(e) => {
-                // El lector emula teclado y cierra con Enter (algunos con Tab).
                 if (e.key !== "Enter" && e.key !== "Tab") return;
                 e.preventDefault();
                 const el = e.target as HTMLInputElement;
@@ -294,7 +343,6 @@ export default function HomePage() {
           </div>
 
           {errorScan && <div style={styles.error}>{errorScan}</div>}
-
           {escaneado && <PanelEscaneo datos={escaneado} />}
 
           <div>
@@ -325,7 +373,7 @@ export default function HomePage() {
           </label>
         </div>
 
-        {/* ---------------- DNI sin ningun dato ---------------- */}
+        {/* ---------------- DNI sin datos ---------------- */}
         {noRegistrado && !manualMode && (
           <div style={styles.previewCard}>
             <h3 style={styles.previewTitle}>Preview</h3>
@@ -346,9 +394,9 @@ export default function HomePage() {
             <input type="hidden" name="nombre" value={form.nombre} />
             <input type="hidden" name="apellido" value={form.apellido} />
             <input type="hidden" name="dni" value={form.dni} />
-            <input type="hidden" name="tipo" value={form.tipo} />
             <input type="hidden" name="residente_nombre" value={form.residenteNombre} />
             <input type="hidden" name="foto_url" value={form.fotoUrl} />
+            {camposComunes}
 
             <div style={styles.previewCard}>
               <h3 style={styles.previewTitle}>Preview</h3>
@@ -370,25 +418,21 @@ export default function HomePage() {
               {form.fotoUrl && (
                 <p style={styles.notaIdentidad}>
                   Cada DNI tiene una sola foto. Si sacás una nueva, reemplaza a la anterior.
-                  El nombre y el apellido, en cambio, solo se corrigen desde
-                  <strong> Carga manual</strong> con motivo.
+                  El nombre y el apellido solo se corrigen desde <strong>Carga manual</strong> con motivo.
                 </p>
               )}
 
               <Row label="Nombre" value={form.nombre} />
               <Row label="Apellido" value={form.apellido} />
               <Row label="DNI" value={form.dni} />
-              <Row label="Tipo" value={form.tipo} />
               <Row label="Observaciones" value={resultado.persona!.observaciones || "—"} />
 
               {resultado.estado === "pendiente" && (
-                <p style={styles.previewWarn}>
-                  La invitación existe pero el residente todavía no la confirmó.
-                </p>
+                <p style={styles.previewWarn}>La invitación existe pero todavía no fue confirmada.</p>
               )}
               {!resultado.autorizado && resultado.estado !== "pendiente" && (
                 <p style={styles.previewDanger}>
-                  Sin autorización vigente. Comunicarse con el residente antes de permitir el ingreso.
+                  Sin autorización vigente. Comunicate con el residente antes de permitir el ingreso.
                 </p>
               )}
 
@@ -403,8 +447,9 @@ export default function HomePage() {
                       <>
                         <Row label="Fecha" value={new Date(r.fecha_hora).toLocaleString("es-AR")} />
                         <Row label="Patente" value={r.patente || "—"} />
-                        <Row label="Lote" value={r.lote_destino || "—"} />
+                        <Row label="Lotes" value={resultado.lotesUltimaEntrada.join(", ") || r.lote_destino || "—"} />
                         <Row label="Movimiento" value={r.es_entrada ? "Entrada" : "Salida"} />
+                        {r.operador_nombre && <Row label="Registró" value={r.operador_nombre} />}
                       </>
                     );
                   })()}
@@ -412,15 +457,21 @@ export default function HomePage() {
               )}
             </div>
 
-            <CamposEditables
-              form={form}
-              setField={setField}
-              labelLote={labelLote}
+            <TipoYRubro form={form} setField={setField} />
+
+            <LotesEditor
+              lotes={lotes}
+              setLotes={setLotes}
+              label={labelLote}
+              esProveedor={form.tipo === "proveedor"}
+              modo={mode}
             />
+
+            <CamposVehiculo form={form} setField={setField} />
 
             {necesitaAutorizacion && (
               <BloqueAutorizacion
-                lote={form.lote}
+                lotes={lotes}
                 quien={authQuien}
                 medio={authMedio}
                 onQuien={setAuthQuien}
@@ -431,20 +482,13 @@ export default function HomePage() {
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            <button
-              type="submit"
-              style={{
-                ...(mode === "entrada" ? styles.submitBtn : styles.submitBtnExit),
-                ...(bloqueado ? styles.submitBtnBloqueado : null),
-              }}
-              disabled={pending || bloqueado}
-            >
-              {pending
-                ? "Procesando…"
-                : bloqueado
-                  ? "Falta la autorización del residente"
-                  : textoBoton}
-            </button>
+            <BotonEnviar
+              mode={mode}
+              pending={pending}
+              bloqueado={bloqueado}
+              texto={textoBoton}
+              motivo={motivoBloqueo(lotes, faltaRubro, operadorId, necesitaAutorizacion, autorizacionCompleta)}
+            />
           </form>
         )}
 
@@ -454,6 +498,7 @@ export default function HomePage() {
             <input type="hidden" name="es_entrada" value={mode === "entrada" ? "true" : "false"} />
             <input type="hidden" name="es_manual" value="true" />
             <input type="hidden" name="foto_url" value={form.fotoUrl} />
+            {camposComunes}
 
             {resultado?.persona && (
               <div style={styles.avisoIdentidad}>
@@ -476,21 +521,22 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div style={styles.formRow}>
-              <div style={styles.field}>
-                <label style={styles.label}>DNI *</label>
-                <input name="dni" required inputMode="numeric" value={form.dni} onChange={(e) => setField("dni", e.target.value)} style={styles.input} />
-              </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Tipo</label>
-                <select name="tipo" value={form.tipo} onChange={(e) => setField("tipo", e.target.value)} style={styles.input}>
-                  <option value="visita">Visita — social</option>
-                  <option value="proveedor">Proveedor — laboral</option>
-                </select>
-              </div>
+            <div style={styles.field}>
+              <label style={styles.label}>DNI *</label>
+              <input name="dni" required inputMode="numeric" value={form.dni} onChange={(e) => setField("dni", e.target.value)} style={styles.input} />
             </div>
 
-            <CamposEditables form={form} setField={setField} labelLote={labelLote} />
+            <TipoYRubro form={form} setField={setField} />
+
+            <LotesEditor
+              lotes={lotes}
+              setLotes={setLotes}
+              label={labelLote}
+              esProveedor={form.tipo === "proveedor"}
+              modo={mode}
+            />
+
+            <CamposVehiculo form={form} setField={setField} />
 
             <div style={styles.field}>
               <label style={styles.label}>Motivo de carga manual *</label>
@@ -509,7 +555,7 @@ export default function HomePage() {
 
             {necesitaAutorizacion && (
               <BloqueAutorizacion
-                lote={form.lote}
+                lotes={lotes}
                 quien={authQuien}
                 medio={authMedio}
                 onQuien={setAuthQuien}
@@ -520,20 +566,13 @@ export default function HomePage() {
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
-            <button
-              type="submit"
-              style={{
-                ...(mode === "entrada" ? styles.submitBtn : styles.submitBtnExit),
-                ...(bloqueado ? styles.submitBtnBloqueado : null),
-              }}
-              disabled={pending || bloqueado}
-            >
-              {pending
-                ? "Procesando…"
-                : bloqueado
-                  ? "Falta la autorización del residente"
-                  : `${textoBoton} (manual)`}
-            </button>
+            <BotonEnviar
+              mode={mode}
+              pending={pending}
+              bloqueado={bloqueado}
+              texto={`${textoBoton} (manual)`}
+              motivo={motivoBloqueo(lotes, faltaRubro, operadorId, necesitaAutorizacion, autorizacionCompleta)}
+            />
           </form>
         )}
       </div>
@@ -545,172 +584,137 @@ export default function HomePage() {
 
 // ---------------------------------------------------------------- Subcomponentes
 
-function Row({ label, value }: { label: string; value: string }) {
+function motivoBloqueo(
+  lotes: string[], faltaRubro: boolean, operadorId: string,
+  necesitaAuth: boolean, authOk: boolean
+): string | null {
+  if (!operadorId) return "Falta indicar quién registra";
+  if (faltaRubro) return "Falta el rubro del proveedor";
+  if (lotes.length === 0) return "Agregá al menos un lote";
+  if (necesitaAuth && !authOk) return "Falta la autorización del residente";
+  return null;
+}
+
+function BotonEnviar({
+  mode, pending, bloqueado, texto, motivo,
+}: {
+  mode: "entrada" | "salida"; pending: boolean; bloqueado: boolean; texto: string; motivo: string | null;
+}) {
   return (
-    <div style={styles.previewRow}>
-      <span style={styles.previewLabel}>{label}:</span>
-      <span style={{ textAlign: "right" }}>{value || "—"}</span>
+    <button
+      type="submit"
+      style={{
+        ...(mode === "entrada" ? styles.submitBtn : styles.submitBtnExit),
+        ...(bloqueado ? styles.submitBtnBloqueado : null),
+      }}
+      disabled={pending || bloqueado}
+    >
+      {pending ? "Procesando…" : bloqueado ? motivo || "Faltan datos" : texto}
+    </button>
+  );
+}
+
+function TipoYRubro({
+  form, setField,
+}: { form: typeof FORM_VACIO; setField: (k: keyof typeof FORM_VACIO, v: string) => void }) {
+  return (
+    <div style={styles.formRow}>
+      <div style={styles.field}>
+        <label style={styles.label}>Motivo del ingreso *</label>
+        <select
+          name="tipo"
+          value={form.tipo}
+          onChange={(e) => {
+            setField("tipo", e.target.value);
+            if (e.target.value !== "proveedor") setField("subtipo", "");
+          }}
+          style={styles.input}
+        >
+          {TIPOS.map((t) => <option key={t.valor} value={t.valor}>{t.etiqueta}</option>)}
+        </select>
+      </div>
+
+      {form.tipo === "proveedor" && (
+        <div style={styles.field}>
+          <label style={styles.label}>Rubro *</label>
+          <select name="subtipo" value={form.subtipo} onChange={(e) => setField("subtipo", e.target.value)} style={styles.input}>
+            <option value="">Seleccionar rubro…</option>
+            {RUBROS_PROVEEDOR.map((r) => <option key={r.valor} value={r.valor}>{r.etiqueta}</option>)}
+          </select>
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * Bloque que aparece cuando la persona no tiene autorizacion vigente.
- * Hasta que no se registre quien autorizo y por que via, no se puede grabar
- * la entrada. El mismo control se repite en el servidor.
+ * Lista de lotes del movimiento. Un proveedor suele anunciarse para varios
+ * en el mismo ingreso; una visita trae uno solo.
  */
-function BloqueAutorizacion({
-  lote, quien, medio, onQuien, onMedio,
+function LotesEditor({
+  lotes, setLotes, label, esProveedor, modo,
 }: {
-  lote: string;
-  quien: string;
-  medio: string;
-  onQuien: (v: string) => void;
-  onMedio: (v: string) => void;
+  lotes: string[];
+  setLotes: (l: string[]) => void;
+  label: string;
+  esProveedor: boolean;
+  modo: "entrada" | "salida";
 }) {
-  const [vecinos, setVecinos] = useState<any[]>([]);
+  const [nuevo, setNuevo] = useState("");
 
-  useEffect(() => {
-    const l = lote.trim();
-    if (!l) { setVecinos([]); return; }
-    let activo = true;
-    getResidentesDeLote(l).then((r) => { if (activo) setVecinos(r); });
-    return () => { activo = false; };
-  }, [lote]);
-
-  const soloDigitos = (t: string) => String(t || "").replace(/\D/g, "");
+  function agregar() {
+    const l = nuevo.trim();
+    if (!l) return;
+    if (lotes.some((x) => x.toLowerCase() === l.toLowerCase())) { setNuevo(""); return; }
+    setLotes([...lotes, l]);
+    setNuevo("");
+  }
 
   return (
-    <div style={styles.bloqueAuth}>
-      <div style={styles.bloqueAuthTitulo}>Ingreso no autorizado</div>
-      <p style={styles.bloqueAuthTexto}>
-        Esta persona no tiene autorización vigente. No se puede registrar la entrada
-        hasta que un residente la autorice por teléfono o WhatsApp.
-      </p>
+    <div style={styles.lotesBox}>
+      <label style={styles.label}>{label} *</label>
 
-      {!lote.trim() && (
-        <p style={styles.bloqueAuthAviso}>Cargá primero el lote para ver a quién contactar.</p>
-      )}
-
-      {lote.trim() && vecinos.length === 0 && (
-        <p style={styles.bloqueAuthAviso}>
-          No hay residentes cargados en el lote {lote}. Verificá el lote o cargalo en Maestros.
-        </p>
-      )}
-
-      {vecinos.length > 0 && (
-        <div style={styles.vecinos}>
-          {vecinos.map((v, i) => (
-            <div key={i} style={styles.vecino}>
-              <span>
-                <strong>{v.nombre} {v.apellido}</strong>
-                <span style={styles.vecinoRol}> · {v.rol === "inquilino" ? "Inquilino" : "Propietario"}</span>
-                {v.telefono ? <span style={styles.vecinoRol}> · {v.telefono}</span> : null}
-              </span>
-              <span style={{ display: "flex", gap: "0.35rem" }}>
-                {v.telefono && (
-                  <>
-                    <a href={`tel:${soloDigitos(v.telefono)}`} style={styles.btnLlamar}>Llamar</a>
-                    <a
-                      href={`https://wa.me/${soloDigitos(v.telefono)}?text=${encodeURIComponent(
-                        `Hola ${v.nombre}, hay una persona en la guardia solicitando ingresar al lote ${lote}. ¿Autorizás el ingreso?`
-                      )}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={styles.btnWhatsapp}
-                    >
-                      WhatsApp
-                    </a>
-                  </>
-                )}
-                <button type="button" onClick={() => onQuien(`${v.nombre} ${v.apellido}`)} style={styles.btnElegir}>
-                  Autorizó
-                </button>
-              </span>
-            </div>
+      {lotes.length > 0 && (
+        <div style={styles.lotesChips}>
+          {lotes.map((l) => (
+            <span key={l} style={styles.chip}>
+              {l}
+              <button type="button" onClick={() => setLotes(lotes.filter((x) => x !== l))} style={styles.chipX} title="Quitar">×</button>
+            </span>
           ))}
         </div>
       )}
 
-      <div style={styles.formRow}>
-        <div style={styles.field}>
-          <label style={styles.label}>¿Quién autorizó? *</label>
-          <input
-            name="autorizado_por"
-            value={quien}
-            onChange={(e) => onQuien(e.target.value)}
-            style={styles.input}
-            placeholder="Nombre del residente"
-          />
-        </div>
-        <div style={styles.field}>
-          <label style={styles.label}>¿Por qué medio? *</label>
-          <select name="autorizacion_medio" value={medio} onChange={(e) => onMedio(e.target.value)} style={styles.input}>
-            <option value="">Seleccionar…</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="telefono">Teléfono</option>
-            <option value="presencial">Presencial</option>
-          </select>
-        </div>
+      <div style={styles.searchRow}>
+        <input
+          value={nuevo}
+          onChange={(e) => setNuevo(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregar(); } }}
+          placeholder={esProveedor ? "Lote… (podés agregar varios)" : "Lote…"}
+          style={styles.input}
+        />
+        <button type="button" onClick={agregar} style={styles.addBtn} disabled={!nuevo.trim()}>Agregar</button>
       </div>
-    </div>
-  );
-}
 
-/** Datos leidos del codigo del DNI, con aviso de vencimiento. */
-function PanelEscaneo({ datos }: { datos: DniEscaneado }) {
-  const edad = calcularEdad(datos.fechaNacimiento);
-
-  if (!datos.completo) {
-    return (
-      <div style={styles.scanPanel}>
-        <div style={styles.scanTitle}>Lectura parcial del DNI</div>
-        <p style={styles.scanTexto}>
-          Se pudo leer el número <strong>{datos.dni}</strong>, pero no el resto de los datos.
+      {esProveedor && (
+        <p style={styles.lotesNota}>
+          {modo === "salida"
+            ? "La salida se registra para todos estos lotes. Vienen precargados desde la entrada y se pueden modificar."
+            : "Agregá todos los lotes para los que se anuncia. La próxima vez vienen precargados."}
         </p>
-      </div>
-    );
-  }
-
-  return (
-    <div style={styles.scanPanel}>
-      <div style={styles.scanTitle}>Datos leídos del DNI</div>
-
-      <div style={styles.scanGrid}>
-        <span><strong>{datos.apellido}, {datos.nombre}</strong></span>
-        <span>DNI {datos.dni}</span>
-        {datos.sexo && <span>Sexo {datos.sexo}</span>}
-        {datos.ejemplar && <span>Ejemplar {datos.ejemplar}</span>}
-        {datos.fechaNacimiento && (
-          <span>Nac. {formatearFecha(datos.fechaNacimiento)}{edad !== null ? ` (${edad} años)` : ""}</span>
-        )}
-        {datos.fechaEmision && <span>Emitido {formatearFecha(datos.fechaEmision)}</span>}
-      </div>
+      )}
+      {lotes.length === 0 && (
+        <p style={styles.lotesFalta}>Agregá al menos un lote para poder registrar el movimiento.</p>
+      )}
     </div>
   );
 }
 
-function CamposEditables({
-  form, setField, labelLote,
-}: {
-  form: typeof FORM_VACIO;
-  setField: (k: keyof typeof FORM_VACIO, v: string) => void;
-  labelLote: string;
-}) {
+function CamposVehiculo({
+  form, setField,
+}: { form: typeof FORM_VACIO; setField: (k: keyof typeof FORM_VACIO, v: string) => void }) {
   return (
     <>
-      <div style={styles.field}>
-        <label style={styles.label}>{labelLote}</label>
-        <input
-          name="lote_destino"
-          required
-          value={form.lote}
-          onChange={(e) => setField("lote", e.target.value)}
-          style={styles.input}
-          placeholder="Ej: 142"
-        />
-      </div>
-
       <div style={styles.formRow}>
         <div style={styles.field}>
           <label style={styles.label}>Ingresa con vehículo</label>
@@ -754,6 +758,152 @@ function CamposEditables({
   );
 }
 
+function BloqueAutorizacion({
+  lotes, quien, medio, onQuien, onMedio,
+}: {
+  lotes: string[];
+  quien: string;
+  medio: string;
+  onQuien: (v: string) => void;
+  onMedio: (v: string) => void;
+}) {
+  const [vecinos, setVecinos] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (lotes.length === 0) { setVecinos([]); return; }
+    let activo = true;
+    Promise.all(lotes.map((l) => getResidentesDeLote(l))).then((listas) => {
+      if (!activo) return;
+      const planas = listas.flat();
+      const vistos = new Set<string>();
+      setVecinos(planas.filter((v) => {
+        const k = `${v.nombre}|${v.apellido}|${v.telefono}`;
+        if (vistos.has(k)) return false;
+        vistos.add(k);
+        return true;
+      }));
+    });
+    return () => { activo = false; };
+  }, [lotes.join(",")]);
+
+  const soloDigitos = (t: string) => String(t || "").replace(/\D/g, "");
+  const listaLotes = lotes.join(", ");
+
+  return (
+    <div style={styles.bloqueAuth}>
+      <div style={styles.bloqueAuthTitulo}>Ingreso no autorizado</div>
+      <p style={styles.bloqueAuthTexto}>
+        Esta persona no tiene autorización vigente. No se puede registrar la entrada
+        hasta que un residente la autorice por teléfono o WhatsApp.
+      </p>
+
+      {lotes.length === 0 && (
+        <p style={styles.bloqueAuthAviso}>Agregá primero el lote para ver a quién contactar.</p>
+      )}
+
+      {lotes.length > 0 && vecinos.length === 0 && (
+        <p style={styles.bloqueAuthAviso}>
+          No hay residentes cargados en {listaLotes}. Verificá el lote o cargalo en Maestros.
+        </p>
+      )}
+
+      {vecinos.length > 0 && (
+        <div style={styles.vecinos}>
+          {vecinos.map((v, i) => (
+            <div key={i} style={styles.vecino}>
+              <span>
+                <strong>{v.nombre} {v.apellido}</strong>
+                <span style={styles.vecinoRol}> · {v.rol === "inquilino" ? "Inquilino" : "Propietario"}</span>
+                {v.telefono ? <span style={styles.vecinoRol}> · {v.telefono}</span> : null}
+              </span>
+              <span style={{ display: "flex", gap: "0.35rem" }}>
+                {v.telefono && (
+                  <>
+                    <a href={`tel:${soloDigitos(v.telefono)}`} style={styles.btnLlamar}>Llamar</a>
+                    <a
+                      href={`https://wa.me/${soloDigitos(v.telefono)}?text=${encodeURIComponent(
+                        `Hola ${v.nombre}, hay una persona en la guardia solicitando ingresar al lote ${listaLotes}. ¿Autorizás el ingreso?`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={styles.btnWhatsapp}
+                    >
+                      WhatsApp
+                    </a>
+                  </>
+                )}
+                <button type="button" onClick={() => onQuien(`${v.nombre} ${v.apellido}`)} style={styles.btnElegir}>
+                  Autorizó
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={styles.formRow}>
+        <div style={styles.field}>
+          <label style={styles.label}>¿Quién autorizó? *</label>
+          <input
+            name="autorizado_por"
+            value={quien}
+            onChange={(e) => onQuien(e.target.value)}
+            style={styles.input}
+            placeholder="Nombre del residente"
+          />
+        </div>
+        <div style={styles.field}>
+          <label style={styles.label}>¿Por qué medio? *</label>
+          <select name="autorizacion_medio" value={medio} onChange={(e) => onMedio(e.target.value)} style={styles.input}>
+            <option value="">Seleccionar…</option>
+            {MEDIOS_AUTORIZACION.map((m) => <option key={m.valor} value={m.valor}>{m.etiqueta}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PanelEscaneo({ datos }: { datos: DniEscaneado }) {
+  const edad = calcularEdad(datos.fechaNacimiento);
+
+  if (!datos.completo) {
+    return (
+      <div style={styles.scanPanel}>
+        <div style={styles.scanTitle}>Lectura parcial del DNI</div>
+        <p style={styles.scanTexto}>
+          Se pudo leer el número <strong>{datos.dni}</strong>, pero no el resto de los datos.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.scanPanel}>
+      <div style={styles.scanTitle}>Datos leídos del DNI</div>
+      <div style={styles.scanGrid}>
+        <span><strong>{datos.apellido}, {datos.nombre}</strong></span>
+        <span>DNI {datos.dni}</span>
+        {datos.sexo && <span>Sexo {datos.sexo}</span>}
+        {datos.ejemplar && <span>Ejemplar {datos.ejemplar}</span>}
+        {datos.fechaNacimiento && (
+          <span>Nac. {formatearFecha(datos.fechaNacimiento)}{edad !== null ? ` (${edad} años)` : ""}</span>
+        )}
+        {datos.fechaEmision && <span>Emitido {formatearFecha(datos.fechaEmision)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={styles.previewRow}>
+      <span style={styles.previewLabel}>{label}:</span>
+      <span style={{ textAlign: "right" }}>{value || "—"}</span>
+    </div>
+  );
+}
+
 function RecentRecords({ refreshKey }: { refreshKey: number }) {
   const [records, setRecords] = useState<any[]>([]);
 
@@ -780,11 +930,15 @@ function RecentRecords({ refreshKey }: { refreshKey: number }) {
                 {r.foto_url && <img src={r.foto_url} alt="" style={{ width: 28, height: 28, borderRadius: "0.3rem", objectFit: "cover" }} />}
                 <span style={styles.recordName}>{r.nombre} {r.apellido}</span>
                 <span style={styles.recordDni}>DNI {r.dni}</span>
+                {r.subtipo && <span style={styles.recordRubro}>{etiquetaRubro(r.subtipo)}</span>}
                 {r.patente && <span style={styles.recordDni}>· {r.patente}</span>}
               </div>
               <div style={styles.recordMeta}>
                 <span>Lote {r.lote_destino || "—"}</span>
-                <span>{new Date(r.fecha_hora).toLocaleTimeString("es-AR")}</span>
+                <span>
+                  {new Date(r.fecha_hora).toLocaleTimeString("es-AR")}
+                  {r.operador_nombre ? ` · ${r.operador_nombre}` : ""}
+                </span>
               </div>
             </div>
           ))}
@@ -811,6 +965,9 @@ const styles: Record<string, React.CSSProperties> = {
   card: { background: "#fff", borderRadius: "1rem", padding: "1.5rem", marginBottom: "1.25rem", border: "1px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.05)" },
   cardTitle: { fontSize: "1.25rem", fontWeight: 800, margin: "0 0 1rem", color: "#0f172a" },
 
+  operadorBox: { background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: "0.75rem", padding: "0.75rem 0.9rem", marginBottom: "1rem" },
+  operadorFalta: { fontSize: "0.88rem", color: "#92400e", margin: 0, lineHeight: 1.5 },
+
   inputGroup: { display: "flex", flexDirection: "column", gap: "0.85rem", marginBottom: "1rem" },
   label: { fontSize: "0.9rem", fontWeight: 700, color: "#374151", display: "block", marginBottom: "0.3rem" },
   scanInput: { width: "100%", padding: "0.85rem", borderRadius: "0.75rem", border: "2px dashed #94a3b8", fontSize: "1rem", outline: "none", boxSizing: "border-box" },
@@ -827,7 +984,6 @@ const styles: Record<string, React.CSSProperties> = {
 
   previewCard: { background: "#f8fafc", borderRadius: "0.85rem", padding: "1rem", marginBottom: "1rem", border: "1px solid #e2e8f0" },
   previewTitle: { margin: "0 0 0.6rem", fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" },
-  previewFoto: { width: 90, height: 90, borderRadius: "0.5rem", objectFit: "cover", border: "2px solid #e2e8f0", display: "block", marginBottom: "0.6rem" },
   previewRow: { display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.3rem 0", fontSize: "0.95rem" },
   previewLabel: { fontWeight: 600, color: "#475569", whiteSpace: "nowrap" },
   previewSub: { marginTop: "0.75rem", paddingTop: "0.6rem", borderTop: "1px solid #e2e8f0" },
@@ -836,8 +992,14 @@ const styles: Record<string, React.CSSProperties> = {
   previewWarn: { fontSize: "0.9rem", color: "#92400e", fontWeight: 600, marginTop: "0.5rem" },
   previewDangerBox: { padding: "0.5rem 0.75rem", borderRadius: "0.5rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600, fontSize: "0.85rem", marginBottom: "0.6rem" },
   notaIdentidad: { fontSize: "0.8rem", color: "#64748b", margin: "0 0 0.6rem", lineHeight: 1.45 },
-  faltaFoto: { marginBottom: "0.6rem" },
   avisoIdentidad: { padding: "0.7rem 0.85rem", borderRadius: "0.75rem", background: "#fffbeb", border: "1px solid #fcd34d", color: "#92400e", fontSize: "0.88rem", fontWeight: 600, lineHeight: 1.5 },
+
+  lotesBox: { background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.75rem", padding: "0.85rem" },
+  lotesChips: { display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" },
+  chip: { display: "inline-flex", alignItems: "center", gap: "0.35rem", background: "#0f172a", color: "#fff", borderRadius: "999px", padding: "0.25rem 0.4rem 0.25rem 0.7rem", fontSize: "0.85rem", fontWeight: 700 },
+  chipX: { border: "none", background: "rgba(255,255,255,0.25)", color: "#fff", borderRadius: "999px", width: 18, height: 18, lineHeight: "16px", cursor: "pointer", fontSize: "0.9rem", padding: 0 },
+  lotesNota: { fontSize: "0.8rem", color: "#64748b", margin: "0.5rem 0 0", lineHeight: 1.45 },
+  lotesFalta: { fontSize: "0.82rem", color: "#b91c1c", fontWeight: 600, margin: "0.5rem 0 0" },
 
   form: { display: "flex", flexDirection: "column", gap: "0.85rem" },
   formRow: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
@@ -847,6 +1009,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   miniBtn: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #d1d5db", background: "#f8fafc", cursor: "pointer" },
   miniBtnDanger: { fontSize: "0.8rem", padding: "0.35rem 0.65rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", cursor: "pointer" },
+  addBtn: { padding: "0.8rem 1.1rem", borderRadius: "0.75rem", border: "none", background: "#0f766e", color: "#fff", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
 
   error: { padding: "0.75rem", borderRadius: "0.75rem", background: "#fef2f2", color: "#dc2626", fontWeight: 600 },
   success: { padding: "0.75rem", borderRadius: "0.75rem", background: "#ecfdf5", color: "#059669", fontWeight: 600 },
@@ -873,5 +1036,6 @@ const styles: Record<string, React.CSSProperties> = {
   badgeExit: { padding: "0.15rem 0.4rem", borderRadius: "0.25rem", background: "#fee2e2", color: "#991b1b", fontWeight: 700, fontSize: "0.75rem" },
   recordName: { fontWeight: 600, color: "#0f172a" },
   recordDni: { color: "#64748b", fontSize: "0.85rem" },
+  recordRubro: { color: "#1e40af", fontSize: "0.75rem", fontWeight: 700, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.25rem", padding: "0.05rem 0.35rem" },
   recordMeta: { display: "flex", flexDirection: "column", alignItems: "flex-end", fontSize: "0.85rem", color: "#64748b" },
 };

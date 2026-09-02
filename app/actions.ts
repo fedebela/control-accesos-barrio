@@ -53,6 +53,8 @@ export type Registro = {
   motivo_manual: string;
   autorizado_por: string;
   autorizacion_medio: string;
+  operador_id: number | null;
+  operador_nombre: string;
   es_entrada: boolean;
   foto_url: string;
   fecha_hora: string;
@@ -97,6 +99,10 @@ export type ResultadoBusqueda = {
   autorizado: boolean;
   ultimoRegistro: Registro | null;
   ultimaEntrada: Registro | null;
+  /** Lotes de la ultima entrada. Se precargan y se pueden modificar. */
+  lotesUltimaEntrada: string[];
+  /** Rubro de proveedor usado la ultima vez. */
+  subtipoPrevio: string;
 };
 
 // ========== IDENTIDAD (tabla personas) ==========
@@ -164,6 +170,144 @@ async function upsertPersona(
     ON CONFLICT (dni) DO UPDATE SET
       foto_url = COALESCE(NULLIF(personas.foto_url, ''), EXCLUDED.foto_url)
   `;
+}
+
+// ========== OPERADORES (vigiladores) ==========
+
+export type Operador = {
+  id: number;
+  nombre: string;
+  apellido: string;
+  dni: string;
+  turno: string;
+  rol: string;
+  principal: boolean;
+  activo: boolean;
+};
+
+export async function getOperadores(): Promise<Operador[]> {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    return (await sql`
+      SELECT id, nombre, apellido, dni, turno, rol, principal, activo
+      FROM operadores
+      ORDER BY principal DESC, activo DESC, apellido, nombre
+    `) as unknown as Operador[];
+  } catch (error) {
+    console.error("Error al obtener operadores:", error);
+    return [];
+  }
+}
+
+export async function createOperador(prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
+  const turno = String(formData.get("turno") || "").trim();
+  const rol = String(formData.get("rol") || "vigilador").trim();
+  const principal = formData.get("principal") === "on" || formData.get("principal") === "true";
+
+  if (!nombre || !apellido || !dni) {
+    return { error: "Nombre, apellido y DNI son obligatorios." };
+  }
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    const existe = (await sql`SELECT 1 FROM operadores WHERE dni = ${dni} LIMIT 1`) as any[];
+    if (existe.length > 0) {
+      return { error: `Ya hay un operador cargado con el DNI ${dni}.` };
+    }
+
+    // Solo puede haber un principal.
+    if (principal) {
+      await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE`;
+    }
+
+    await sql`
+      INSERT INTO operadores (nombre, apellido, dni, turno, rol, principal, activo)
+      VALUES (${nombre}, ${apellido}, ${dni}, ${turno || null}, ${rol}, ${principal}, TRUE)
+    `;
+
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { success: true, message: "Operador guardado correctamente." };
+  } catch (error: any) {
+    return { error: error.message || "Error al guardar operador." };
+  }
+}
+
+export async function updateOperador(id: number, prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const apellido = String(formData.get("apellido") || "").trim();
+  const dni = String(formData.get("dni") || "").trim();
+  const turno = String(formData.get("turno") || "").trim();
+  const rol = String(formData.get("rol") || "vigilador").trim();
+  const principal = formData.get("principal") === "on" || formData.get("principal") === "true";
+  const activo = formData.get("activo") !== "false";
+
+  if (!nombre || !apellido || !dni) {
+    return { error: "Nombre, apellido y DNI son obligatorios." };
+  }
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    const otro = (await sql`
+      SELECT id FROM operadores WHERE dni = ${dni} AND id <> ${id} LIMIT 1
+    `) as any[];
+    if (otro.length > 0) {
+      return { error: `Ya hay otro operador con el DNI ${dni}.` };
+    }
+
+    if (principal) {
+      await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE AND id <> ${id}`;
+    }
+
+    await sql`
+      UPDATE operadores SET nombre=${nombre}, apellido=${apellido}, dni=${dni},
+        turno=${turno || null}, rol=${rol}, principal=${principal}, activo=${activo}
+      WHERE id = ${id}
+    `;
+
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { success: true, message: "Operador actualizado." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+/** Marca un operador como principal para que venga preseleccionado. */
+export async function setOperadorPrincipal(id: number) {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    await sql`UPDATE operadores SET principal = FALSE WHERE principal = TRUE`;
+    await sql`UPDATE operadores SET principal = TRUE, activo = TRUE WHERE id = ${id}`;
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { success: true, message: "Operador marcado como principal." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+export async function deleteOperador(id: number) {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    // No se borra: los movimientos ya registrados lo referencian. Se desactiva.
+    await sql`UPDATE operadores SET activo = FALSE, principal = FALSE WHERE id = ${id}`;
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { success: true, message: "Operador dado de baja." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
 }
 
 // ========== ESTADO DE AUTORIZACION ==========
@@ -561,6 +705,8 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     autorizado: false,
     ultimoRegistro: null,
     ultimaEntrada: null,
+    lotesUltimaEntrada: [],
+    subtipoPrevio: "",
   };
 
   const dniLimpio = String(dni || "").trim();
@@ -632,7 +778,30 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       tieneRegistro: Boolean(ultimoRegistro),
     });
 
-    return { persona, estado, autorizado, ultimoRegistro, ultimaEntrada };
+    // Lotes de la ultima entrada, para precargar la lista de un proveedor
+    // que vuelve a anunciarse en los mismos lotes.
+    let lotesUltimaEntrada: string[] = [];
+    if (ultimaEntrada?.id) {
+      const filas = (await sql`
+        SELECT lote FROM registro_lotes
+        WHERE registro_id = ${ultimaEntrada.id}
+        ORDER BY id
+      `) as any[];
+      lotesUltimaEntrada = filas.map((f) => f.lote as string);
+    }
+    if (lotesUltimaEntrada.length === 0 && ultimaEntrada?.lote_destino) {
+      lotesUltimaEntrada = [ultimaEntrada.lote_destino];
+    }
+
+    return {
+      persona,
+      estado,
+      autorizado,
+      ultimoRegistro,
+      ultimaEntrada,
+      lotesUltimaEntrada,
+      subtipoPrevio: ultimaEntrada?.subtipo || ultimoRegistro?.subtipo || "",
+    };
   } catch (error) {
     console.error("Error al buscar persona:", error);
     return vacio;
@@ -714,8 +883,21 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   const es_entrada = formData.get("es_entrada") === "true";
   const foto_url = String(formData.get("foto_url") || "").trim();
 
-  // El lote es un unico dato: donde se autoriza (entrada) o de donde se retira (salida).
-  const lote = String(formData.get("lote_destino") || "").trim();
+  // Un proveedor puede anunciarse para varios lotes en el mismo ingreso.
+  // Una visita normalmente trae uno solo. El primero de la lista queda como
+  // lote_destino del movimiento; todos se guardan en registro_lotes.
+  const lotes = Array.from(
+    new Set(
+      formData
+        .getAll("lote_destino")
+        .map((l) => String(l).trim())
+        .filter(Boolean)
+    )
+  );
+  const lote = lotes[0] || "";
+
+  const operador_id = String(formData.get("operador_id") || "").trim();
+  const operador_nombre = String(formData.get("operador_nombre") || "").trim();
 
   // Solo se completan cuando la persona NO tiene autorizacion vigente.
   const autorizado_por = String(formData.get("autorizado_por") || "").trim();
@@ -728,9 +910,17 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   if (!lote) {
     return {
       error: es_entrada
-        ? "Debe indicar el lote que autoriza el ingreso."
-        : "Debe indicar el lote desde donde se retira.",
+        ? "Debe indicar al menos un lote que autoriza el ingreso."
+        : "Debe indicar al menos un lote desde donde se retira.",
     };
+  }
+
+  if (!operador_nombre) {
+    return { error: "Debe indicar qué operador registra el movimiento." };
+  }
+
+  if (tipo === "proveedor" && !subtipo) {
+    return { error: "Para un proveedor hay que indicar el rubro." };
   }
 
   if (es_manual && !motivo_manual) {
@@ -819,14 +1009,26 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       { sobrescribir: puedeModificar || Boolean(foto_url), motivo: motivo_manual }
     );
 
-    await sql`
+    const insertado = (await sql`
       INSERT INTO registros (nombre, apellido, dni, tipo, subtipo, vehiculo_tipo, patente,
                              residente_nombre, lote_destino, observaciones, es_manual, motivo_manual,
-                             autorizado_por, autorizacion_medio, es_entrada)
+                             autorizado_por, autorizacion_medio, es_entrada,
+                             operador_id, operador_nombre)
       VALUES (${nombreFinal}, ${apellidoFinal}, ${dni}, ${tipo}, ${subtipo}, ${vehiculo_tipo}, ${patente},
               ${residente_nombre}, ${lote}, ${observaciones}, ${es_manual}, ${motivo_manual},
-              ${autorizado_por || null}, ${autorizacion_medio || null}, ${es_entrada})
-    `;
+              ${autorizado_por || null}, ${autorizacion_medio || null}, ${es_entrada},
+              ${operador_id ? Number(operador_id) : null}, ${operador_nombre})
+      RETURNING id
+    `) as any[];
+
+    const registroId = insertado[0]?.id;
+
+    // Todos los lotes del movimiento, incluido el primero.
+    if (registroId) {
+      for (const l of lotes) {
+        await sql`INSERT INTO registro_lotes (registro_id, lote) VALUES (${registroId}, ${l})`;
+      }
+    }
 
     // El maestro de autorizados replica la identidad vigente para que no queden
     // dos fotos distintas del mismo DNI dando vueltas.
@@ -855,10 +1057,15 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
 
     revalidatePath("/");
     revalidatePath("/informes");
+
+    const detalleLotes =
+      lotes.length > 1 ? ` Lotes: ${lotes.join(", ")}.` : ` Lote ${lote}.`;
+
     return {
       success: true,
       message:
         (es_entrada ? "Entrada registrada correctamente." : "Salida registrada correctamente.") +
+        detalleLotes +
         mensajeIdentidad +
         mensajeExtra,
     };
@@ -913,6 +1120,99 @@ export async function getRegistros(fecha?: string, dni?: string): Promise<Regist
     `) as unknown as Registro[];
   } catch (error) {
     console.error("Error al obtener registros:", error);
+    return [];
+  }
+}
+
+export type FiltrosInforme = {
+  desde?: string;
+  hasta?: string;
+  dni?: string;
+  texto?: string;      // nombre o apellido
+  lote?: string;
+  tipo?: string;
+  subtipo?: string;
+  patente?: string;
+  operador?: string;
+  movimiento?: string; // "entrada" | "salida" | ""
+  soloManuales?: boolean;
+  soloSinAutorizacion?: boolean;
+};
+
+export type RegistroInforme = Registro & { lotes: string };
+
+/**
+ * Consulta de la bitacora con filtros combinables para los informes.
+ * Los lotes vienen agregados en un solo campo separado por coma, para poder
+ * mostrar en una fila un ingreso de proveedor anunciado en varios lotes.
+ */
+export async function getRegistrosFiltrados(f: FiltrosInforme): Promise<RegistroInforme[]> {
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    const desde = f.desde?.trim() || null;
+    const hasta = f.hasta?.trim() || null;
+    const dni = f.dni?.trim() || null;
+    const texto = f.texto?.trim() ? `%${f.texto.trim()}%` : null;
+    const lote = f.lote?.trim() || null;
+    const tipo = f.tipo?.trim() || null;
+    const subtipo = f.subtipo?.trim() || null;
+    const patente = f.patente?.trim() ? `%${f.patente.trim()}%` : null;
+    const operador = f.operador?.trim() ? `%${f.operador.trim()}%` : null;
+    const esEntrada =
+      f.movimiento === "entrada" ? true : f.movimiento === "salida" ? false : null;
+
+    return (await sql`
+      SELECT r.*,
+             p.foto_url,
+             COALESCE(
+               (SELECT string_agg(rl.lote, ', ' ORDER BY rl.id)
+                FROM registro_lotes rl WHERE rl.registro_id = r.id),
+               r.lote_destino
+             ) AS lotes
+      FROM registros r
+      LEFT JOIN personas p ON p.dni = r.dni
+      WHERE (${desde}::date IS NULL OR r.fecha_hora::date >= ${desde}::date)
+        AND (${hasta}::date IS NULL OR r.fecha_hora::date <= ${hasta}::date)
+        AND (${dni}::text IS NULL OR r.dni = ${dni})
+        AND (${texto}::text IS NULL OR r.nombre ILIKE ${texto} OR r.apellido ILIKE ${texto})
+        AND (${tipo}::text IS NULL OR r.tipo = ${tipo})
+        AND (${subtipo}::text IS NULL OR r.subtipo = ${subtipo})
+        AND (${patente}::text IS NULL OR r.patente ILIKE ${patente})
+        AND (${operador}::text IS NULL OR r.operador_nombre ILIKE ${operador})
+        AND (${esEntrada}::boolean IS NULL OR r.es_entrada = ${esEntrada})
+        AND (${f.soloManuales ? true : null}::boolean IS NULL OR r.es_manual = TRUE)
+        AND (${f.soloSinAutorizacion ? true : null}::boolean IS NULL OR r.autorizado_por IS NOT NULL)
+        AND (
+          ${lote}::text IS NULL
+          OR r.lote_destino = ${lote}
+          OR EXISTS (
+            SELECT 1 FROM registro_lotes rl
+            WHERE rl.registro_id = r.id AND rl.lote = ${lote}
+          )
+        )
+      ORDER BY r.fecha_hora DESC
+      LIMIT 2000
+    `) as unknown as RegistroInforme[];
+  } catch (error) {
+    console.error("Error al filtrar registros:", error);
+    return [];
+  }
+}
+
+/** Lotes que aparecen en la bitacora, para el desplegable de filtros. */
+export async function getLotesUsados(): Promise<string[]> {
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const filas = (await sql`
+      SELECT DISTINCT lote FROM registro_lotes
+      WHERE lote IS NOT NULL AND lote <> ''
+      ORDER BY lote
+    `) as any[];
+    return filas.map((f) => f.lote as string);
+  } catch {
     return [];
   }
 }
