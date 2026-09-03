@@ -198,20 +198,26 @@ export type PersonaDeMiLote = {
 };
 
 /**
- * Personas que alguna vez ingresaron al lote del residente.
+ * Busca entre las personas que ingresaron al lote del residente.
  *
- * Es todo lo que el residente puede ver: nunca el padron completo del barrio.
- * Que no pueda averiguar quien visita a sus vecinos no es un detalle, es lo
- * que hace aceptable darle acceso.
+ * A proposito NO existe un listado completo: el historial de visitas de un
+ * lote es informacion sensible y no tiene que quedar a la vista de cualquiera
+ * que consiga la contraseña. Hay que saber a quien se busca para encontrarlo.
+ *
+ * Ademas, el residente nunca ve gente de otros lotes.
  */
-export async function getPersonasDeMiLote(): Promise<PersonaDeMiLote[]> {
+export async function buscarEnMiLote(consulta: string): Promise<PersonaDeMiLote[]> {
   const sesion = await getSesionResidente();
   if (!sesion) return [];
+
+  const q = String(consulta || "").trim();
+  if (q.length < 3) return [];
 
   try {
     await ensureTables();
     const sql = getSql();
     const lote = sesion.lote.toLowerCase();
+    const patron = `%${q}%`;
 
     const filas = (await sql`
       SELECT p.dni, p.nombre, p.apellido, COALESCE(p.foto_url, '') AS foto_url,
@@ -245,8 +251,14 @@ export async function getPersonasDeMiLote(): Promise<PersonaDeMiLote[]> {
       ) v ON v.dni = p.dni
       LEFT JOIN residentes res ON res.dni = p.dni
       WHERE res.dni IS NULL
+        AND (
+          p.dni ILIKE ${patron}
+          OR p.nombre ILIKE ${patron}
+          OR p.apellido ILIKE ${patron}
+          OR COALESCE(v.patente, '') ILIKE ${patron}
+        )
       ORDER BY v.ultima_visita DESC
-      LIMIT 300
+      LIMIT 25
     `) as any[];
 
     return filas.map((f) => {
@@ -280,6 +292,55 @@ export async function getPersonasDeMiLote(): Promise<PersonaDeMiLote[]> {
     });
   } catch (error) {
     console.error("Error al obtener personas del lote:", error);
+    return [];
+  }
+}
+
+/**
+ * Autorizaciones vigentes que otorgo el residente para su lote.
+ *
+ * Esto si se muestra al entrar: son sus propias decisiones y las necesita a
+ * mano para poder revocarlas. No revela el historial de visitas del lote.
+ */
+export async function getMisAutorizados(): Promise<PersonaDeMiLote[]> {
+  const sesion = await getSesionResidente();
+  if (!sesion) return [];
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const lote = sesion.lote.toLowerCase();
+
+    const filas = (await sql`
+      SELECT a.dni, a.tipo AS tipo_autorizacion,
+             COALESCE(p.nombre, a.nombre) AS nombre,
+             COALESCE(p.apellido, a.apellido) AS apellido,
+             COALESCE(p.foto_url, a.foto_url, '') AS foto_url,
+             COALESCE(a.patente, '') AS patente,
+             a.created_at
+      FROM autorizados a
+      LEFT JOIN personas p ON p.dni = a.dni
+      WHERE lower(COALESCE(a.lote, '')) = ${lote}
+        AND a.autorizado = TRUE AND a.usada = FALSE
+      ORDER BY a.created_at DESC
+    `) as any[];
+
+    return filas.map((f) => ({
+      dni: f.dni,
+      nombre: f.nombre || "",
+      apellido: f.apellido || "",
+      foto_url: f.foto_url || "",
+      tipo: "",
+      subtipo: "",
+      patente: f.patente || "",
+      ultimaVisita: f.created_at,
+      visitas: 0,
+      estado: (f.tipo_autorizacion === "permanente" ? "permanente" : "temporal") as EstadoAutorizacion,
+      autorizadoAqui: true,
+      tipoAutorizacion: f.tipo_autorizacion || "",
+    }));
+  } catch (error) {
+    console.error("Error al obtener autorizados del lote:", error);
     return [];
   }
 }

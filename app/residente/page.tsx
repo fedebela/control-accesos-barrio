@@ -1,9 +1,9 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getPersonasDeMiLote, autorizarDesdeResidente, revocarDesdeResidente,
+  getMisAutorizados, buscarEnMiLote, autorizarDesdeResidente, revocarDesdeResidente,
   type PersonaDeMiLote,
 } from "@/app/actions";
 import { getSesionActual, cerrarSesion, cambiarMiClave, type SesionActual } from "@/app/actions-auth";
@@ -12,9 +12,16 @@ import { etiquetaRubro } from "@/lib/constantes";
 export default function ResidentePage() {
   const router = useRouter();
   const [sesion, setSesion] = useState<SesionActual | null>(null);
-  const [personas, setPersonas] = useState<PersonaDeMiLote[]>([]);
+  const [autorizadas, setAutorizadas] = useState<PersonaDeMiLote[]>([]);
   const [cargando, setCargando] = useState(true);
+
+  // La busqueda no arranca con nada cargado a proposito: el historial de
+  // visitas del lote no tiene que quedar a la vista con solo abrir la app.
   const [busqueda, setBusqueda] = useState("");
+  const [resultados, setResultados] = useState<PersonaDeMiLote[]>([]);
+  const [buscando, setBuscando] = useState(false);
+  const [busco, setBusco] = useState(false);
+
   const [seleccion, setSeleccion] = useState<string[]>([]);
   const [tipo, setTipo] = useState<"temporal" | "permanente">("temporal");
   const [msg, setMsg] = useState<any>(null);
@@ -25,30 +32,32 @@ export default function ResidentePage() {
 
   const cargar = async () => {
     setCargando(true);
-    const [s, p] = await Promise.all([getSesionActual(), getPersonasDeMiLote()]);
+    const [s, a] = await Promise.all([getSesionActual(), getMisAutorizados()]);
     setSesion(s);
-    setPersonas(p);
+    setAutorizadas(a);
     setCargando(false);
   };
 
   useEffect(() => { cargar(); }, []);
+
   useEffect(() => {
-    if (estado?.success) { setSeleccion([]); cargar(); }
+    if (!estado?.success) return;
+    setSeleccion([]);
+    setResultados([]);
+    setBusqueda("");
+    setBusco(false);
+    cargar();
   }, [estado]);
 
-  const filtradas = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
-    if (!q) return personas;
-    return personas.filter(
-      (p) =>
-        p.dni.includes(q) ||
-        p.nombre.toLowerCase().includes(q) ||
-        p.apellido.toLowerCase().includes(q) ||
-        p.patente.toLowerCase().includes(q)
-    );
-  }, [personas, busqueda]);
+  async function buscar() {
+    const q = busqueda.trim();
+    if (q.length < 3) return;
+    setBuscando(true);
+    setResultados(await buscarEnMiLote(q));
+    setBusco(true);
+    setBuscando(false);
+  }
 
-  const autorizadas = personas.filter((p) => p.autorizadoAqui);
   const alternar = (dni: string) =>
     setSeleccion((s) => (s.includes(dni) ? s.filter((x) => x !== dni) : [...s, dni]));
 
@@ -148,31 +157,46 @@ export default function ResidentePage() {
         )}
       </div>
 
-      {/* ---------- Lista de personas del lote ---------- */}
+      {/* ---------- Buscador ---------- */}
       <div style={styles.tarjeta}>
-        <h2 style={styles.tarjetaTitulo}>Personas que ya visitaron tu lote</h2>
+        <h2 style={styles.tarjetaTitulo}>Autorizar a alguien</h2>
         <p style={styles.ayuda}>
-          Tocá para seleccionar y después elegí si querés habilitarlas por única vez o
-          de forma permanente. Si alguien nunca vino, la primera vez tiene que
+          Buscá por nombre, apellido, DNI o patente entre las personas que ya
+          visitaron tu lote. Si alguien nunca vino, la primera vez tiene que
           registrarse en la guardia.
         </p>
 
-        <input
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar por nombre, DNI o patente…"
-          style={styles.buscador}
-        />
+        <div style={styles.filaBusqueda}>
+          <input
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); buscar(); } }}
+            placeholder="Nombre, DNI o patente…"
+            style={styles.buscador}
+          />
+          <button
+            type="button"
+            onClick={buscar}
+            disabled={buscando || busqueda.trim().length < 3}
+            style={styles.btnBuscar}
+          >
+            {buscando ? "…" : "Buscar"}
+          </button>
+        </div>
 
-        {filtradas.length === 0 ? (
+        {busqueda.trim().length > 0 && busqueda.trim().length < 3 && (
+          <p style={styles.vacio}>Escribí al menos 3 letras o números.</p>
+        )}
+
+        {busco && resultados.length === 0 && (
           <p style={styles.vacio}>
-            {personas.length === 0
-              ? "Todavía no hay registros de visitas a tu lote."
-              : "No se encontró a nadie con ese dato."}
+            No se encontró a nadie con ese dato entre quienes visitaron tu lote.
           </p>
-        ) : (
+        )}
+
+        {resultados.length > 0 && (
           <div style={styles.lista}>
-            {filtradas.map((p) => {
+            {resultados.map((p) => {
               const elegida = seleccion.includes(p.dni);
               return (
                 <button
@@ -270,7 +294,9 @@ const styles: Record<string, React.CSSProperties> = {
   ayuda: { fontSize: "0.85rem", color: "#64748b", margin: "0 0 0.85rem", lineHeight: 1.55 },
   vacio: { fontSize: "0.9rem", color: "#94a3b8", margin: 0, lineHeight: 1.55 },
 
-  buscador: { width: "100%", padding: "0.8rem", borderRadius: "0.7rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none", boxSizing: "border-box", marginBottom: "0.7rem" },
+  filaBusqueda: { display: "flex", gap: "0.45rem", marginBottom: "0.7rem" },
+  buscador: { flex: 1, minWidth: 0, padding: "0.8rem", borderRadius: "0.7rem", border: "1px solid #d1d5db", fontSize: "1rem", outline: "none", boxSizing: "border-box" },
+  btnBuscar: { padding: "0.8rem 1.1rem", borderRadius: "0.7rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, fontSize: "0.92rem", cursor: "pointer", whiteSpace: "nowrap" },
 
   lista: { display: "flex", flexDirection: "column", gap: "0.4rem" },
   item: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", padding: "0.65rem 0.75rem", borderRadius: "0.6rem", background: "#f8fafc", border: "1px solid #e2e8f0", cursor: "pointer", width: "100%", font: "inherit", textAlign: "left" },
