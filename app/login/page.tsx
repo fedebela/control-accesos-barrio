@@ -12,7 +12,8 @@ function Formulario() {
   const [forzar, setForzar] = useState(false);
 
   useEffect(() => {
-    if (estado?.success) router.replace("/");
+    // Cada rol arranca en su pantalla.
+    if (estado?.success) router.replace(estado.rol === "residente" ? "/residente" : "/");
   }, [estado, router]);
 
   // Al fallar por sesion ocupada se ofrece el cierre forzado.

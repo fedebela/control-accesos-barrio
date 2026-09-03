@@ -147,12 +147,17 @@ async function createTables() {
   // Usuarios del puesto de guardia. Son pocos y compartidos por turno: varios
   // operadores usan el mismo usuario, por eso quien firma el movimiento se
   // sigue eligiendo del desplegable de operadores.
+  //   rol = 'puesto'    -> guardia. Rige la regla de una sola sesion a la vez.
+  //   rol = 'residente' -> entra desde su celular, ve solo su lote. Sesiones
+  //                        concurrentes, porque son muchos y a la vez.
   await sql`
     CREATE TABLE IF NOT EXISTS usuarios (
       id BIGSERIAL PRIMARY KEY,
       usuario VARCHAR(50) NOT NULL UNIQUE,
       descripcion VARCHAR(100),
       clave_hash TEXT NOT NULL,
+      rol VARCHAR(20) NOT NULL DEFAULT 'puesto',
+      residente_id BIGINT REFERENCES residentes(id) ON DELETE CASCADE,
       activo BOOLEAN DEFAULT TRUE,
       ultimo_acceso TIMESTAMP WITH TIME ZONE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -211,8 +216,33 @@ async function createTables() {
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS operador_id BIGINT`;
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS operador_nombre VARCHAR(200)`;
 
+  await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS rol VARCHAR(20) NOT NULL DEFAULT 'puesto'`;
+  await sql`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS residente_id BIGINT REFERENCES residentes(id) ON DELETE CASCADE`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_residentes_lote ON residentes (lote)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sesiones_expira ON sesiones (expira_en)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_usuarios_residente ON usuarios (residente_id)`;
+
+  // ---------- AUTORIZACIONES POR LOTE ----------
+  // Una persona puede estar autorizada por varios lotes a la vez, cada uno
+  // independiente del otro. Antes habia una sola autorizacion por DNI y al
+  // autorizar se borraban las anteriores: si dos lotes autorizaban a la misma
+  // persona, el segundo pisaba al primero sin aviso.
+  //
+  // Se limpian los duplicados historicos antes de crear el indice, quedandose
+  // con la mas reciente de cada (dni, lote).
+  await sql`
+    DELETE FROM autorizados a
+    USING autorizados b
+    WHERE a.dni = b.dni
+      AND lower(COALESCE(a.lote, '')) = lower(COALESCE(b.lote, ''))
+      AND a.usada = FALSE AND b.usada = FALSE
+      AND a.created_at < b.created_at
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_autorizados_dni_lote
+    ON autorizados (dni, lower(COALESCE(lote, ''))) WHERE usada = FALSE
+  `;
   await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_reg ON registro_lotes (registro_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_lote ON registro_lotes (lote)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_tipo ON registros (tipo)`;

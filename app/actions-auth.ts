@@ -8,8 +8,8 @@ import {
   LARGO_CLAVE_INGRESO, LARGO_CLAVE_GESTION,
 } from "@/lib/auth";
 import {
-  firmarSesion, verificarSesion, COOKIE_SESION, HORAS_SESION,
-  type PayloadSesion,
+  firmarSesion, verificarSesion, COOKIE_SESION, HORAS_SESION, HORAS_SESION_RESIDENTE,
+  type PayloadSesion, type RolUsuario,
 } from "@/lib/auth-token";
 
 const CLAVE_GESTION = "clave_gestion";
@@ -64,6 +64,9 @@ export type SesionActual = {
   usuarioId: number;
   usuario: string;
   descripcion: string;
+  rol: RolUsuario;
+  /** Lote del residente. Vacio para los usuarios del puesto. */
+  lote: string;
   gestionHabilitada: boolean;
   expiraEn: string;
 };
@@ -90,9 +93,10 @@ export async function getSesionActual(): Promise<SesionActual | null> {
 
     const filas = (await sql`
       SELECT s.id, s.usuario_id, s.usuario, s.gestion_habilitada, s.expira_en,
-             u.descripcion, u.activo
+             u.descripcion, u.activo, u.rol, COALESCE(r.lote, '') AS lote
       FROM sesiones s
       JOIN usuarios u ON u.id = s.usuario_id
+      LEFT JOIN residentes r ON r.id = u.residente_id
       WHERE s.id = ${payload.sid} AND s.expira_en > NOW()
       LIMIT 1
     `) as any[];
@@ -107,6 +111,8 @@ export async function getSesionActual(): Promise<SesionActual | null> {
       usuarioId: Number(s.usuario_id),
       usuario: s.usuario,
       descripcion: s.descripcion || "",
+      rol: (s.rol || "puesto") as RolUsuario,
+      lote: s.lote || "",
       gestionHabilitada: Boolean(s.gestion_habilitada),
       expiraEn: s.expira_en,
     };
@@ -135,14 +141,14 @@ export async function getSesionOcupada(): Promise<{ usuario: string; desde: stri
   }
 }
 
-async function guardarCookie(payload: PayloadSesion) {
+async function guardarCookie(payload: PayloadSesion, horas = HORAS_SESION) {
   const token = await firmarSesion(payload);
   (await cookies()).set(COOKIE_SESION, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: HORAS_SESION * 3600,
+    maxAge: horas * 3600,
   });
 }
 
@@ -164,7 +170,7 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
     await limpiarVencidas(sql);
 
     const filas = (await sql`
-      SELECT id, usuario, descripcion, clave_hash, activo
+      SELECT id, usuario, descripcion, clave_hash, activo, rol
       FROM usuarios WHERE usuario = ${usuario} LIMIT 1
     `) as any[];
 
@@ -174,44 +180,55 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
       return { error: "Usuario o contraseña incorrectos." };
     }
 
-    // ---- Un solo usuario a la vez ----
-    const activas = (await sql`
-      SELECT id, usuario, creada_en FROM sesiones WHERE expira_en > NOW()
-    `) as any[];
+    const rol: RolUsuario = u.rol === "residente" ? "residente" : "puesto";
 
-    if (activas.length > 0) {
-      const otra = activas[0];
-
-      if (!forzar) {
-        return {
-          error:
-            `Ya hay una sesión abierta de "${otra.usuario}" desde las ` +
-            `${new Date(otra.creada_en).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}. ` +
-            `Tiene que cerrar sesión para que entres.`,
-          sesionOcupada: true,
-          usuarioOcupa: otra.usuario,
-        };
-      }
-
-      // El cierre forzado existe para cuando el turno anterior se fue sin
-      // desloguear. Pide la clave de gestion para que no lo haga cualquiera.
-      const cfg = (await sql`
-        SELECT valor FROM configuracion WHERE clave = ${CLAVE_GESTION} LIMIT 1
+    // ---- Un solo usuario del PUESTO a la vez ----
+    // No aplica a los residentes: entran desde su celular, son muchos y a la
+    // vez. La restriccion existe para que no haya dos guardias operando la
+    // misma pantalla con sesiones distintas.
+    if (rol === "puesto") {
+      const activas = (await sql`
+        SELECT s.id, s.usuario, s.creada_en
+        FROM sesiones s
+        JOIN usuarios us ON us.id = s.usuario_id
+        WHERE s.expira_en > NOW() AND us.rol = 'puesto'
       `) as any[];
 
-      if (!cfg[0] || !(await verificarClave(claveGestion, cfg[0].valor))) {
-        return {
-          error: "Clave de gestión incorrecta. No se cerró la otra sesión.",
-          sesionOcupada: true,
-          usuarioOcupa: otra.usuario,
-        };
-      }
+      if (activas.length > 0) {
+        const otra = activas[0];
 
-      await sql`DELETE FROM sesiones`;
+        if (!forzar) {
+          return {
+            error:
+              `Ya hay una sesión abierta de "${otra.usuario}" desde las ` +
+              `${new Date(otra.creada_en).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}. ` +
+              `Tiene que cerrar sesión para que entres.`,
+            sesionOcupada: true,
+            usuarioOcupa: otra.usuario,
+          };
+        }
+
+        // El cierre forzado existe para cuando el turno anterior se fue sin
+        // desloguear. Pide la clave de gestion para que no lo haga cualquiera.
+        const cfg = (await sql`
+          SELECT valor FROM configuracion WHERE clave = ${CLAVE_GESTION} LIMIT 1
+        `) as any[];
+
+        if (!cfg[0] || !(await verificarClave(claveGestion, cfg[0].valor))) {
+          return {
+            error: "Clave de gestión incorrecta. No se cerró la otra sesión.",
+            sesionOcupada: true,
+            usuarioOcupa: otra.usuario,
+          };
+        }
+
+        await sql`DELETE FROM sesiones WHERE id = ANY(${activas.map((a) => a.id)})`;
+      }
     }
 
     const sid = generarId();
-    const expira = new Date(Date.now() + HORAS_SESION * 3600 * 1000);
+    const horas = rol === "residente" ? HORAS_SESION_RESIDENTE : HORAS_SESION;
+    const expira = new Date(Date.now() + horas * 3600 * 1000);
 
     await sql`
       INSERT INTO sesiones (id, usuario_id, usuario, expira_en, gestion_habilitada)
@@ -219,15 +236,19 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
     `;
     await sql`UPDATE usuarios SET ultimo_acceso = NOW() WHERE id = ${u.id}`;
 
-    await guardarCookie({
-      sid,
-      uid: Number(u.id),
-      usuario: u.usuario,
-      gestion: false,
-      exp: Math.floor(expira.getTime() / 1000),
-    });
+    await guardarCookie(
+      {
+        sid,
+        uid: Number(u.id),
+        usuario: u.usuario,
+        rol,
+        gestion: false,
+        exp: Math.floor(expira.getTime() / 1000),
+      },
+      horas
+    );
 
-    return { success: true };
+    return { success: true, rol };
   } catch (error: any) {
     return { error: error.message || "No se pudo iniciar sesión." };
   }
@@ -275,6 +296,7 @@ export async function desbloquearGestion(prevState: any, formData: FormData) {
       sid: sesion.sid,
       uid: sesion.usuarioId,
       usuario: sesion.usuario,
+      rol: sesion.rol,
       gestion: true,
       exp: Math.floor(new Date(sesion.expiraEn).getTime() / 1000),
     });
@@ -298,6 +320,7 @@ export async function bloquearGestion() {
       sid: sesion.sid,
       uid: sesion.usuarioId,
       usuario: sesion.usuario,
+      rol: sesion.rol,
       gestion: false,
       exp: Math.floor(new Date(sesion.expiraEn).getTime() / 1000),
     });
@@ -313,8 +336,166 @@ export async function bloquearGestion() {
 export async function exigirGestion(): Promise<string | null> {
   const sesion = await getSesionActual();
   if (!sesion) return "La sesión venció. Volvé a iniciar sesión.";
+  // Un residente nunca accede a la gestion del barrio, tenga o no la clave.
+  if (sesion.rol !== "puesto") return "No tenés permiso para hacer esto.";
   if (!sesion.gestionHabilitada) return "Necesitás la clave de gestión para hacer esto.";
   return null;
+}
+
+/** Sesion de residente con su lote. Null si no es residente o no hay sesion. */
+export async function getSesionResidente(): Promise<SesionActual | null> {
+  const sesion = await getSesionActual();
+  if (!sesion || sesion.rol !== "residente" || !sesion.lote) return null;
+  return sesion;
+}
+
+// ========== ACCESO DE RESIDENTES ==========
+
+/**
+ * Crea el acceso de un residente. Devuelve la contraseña inicial UNA sola vez,
+ * para pasarsela por WhatsApp; despues queda hasheada y no se puede recuperar.
+ */
+export async function crearAccesoResidente(residenteId: number) {
+  const bloqueo = await exigirGestion();
+  if (bloqueo) return { error: bloqueo };
+
+  try {
+    const sql = getSql();
+
+    const filas = (await sql`
+      SELECT id, nombre, apellido, dni, lote FROM residentes WHERE id = ${residenteId} LIMIT 1
+    `) as any[];
+    const r = filas[0];
+    if (!r) return { error: "No se encontró el residente." };
+
+    const yaTiene = (await sql`
+      SELECT usuario FROM usuarios WHERE residente_id = ${residenteId} LIMIT 1
+    `) as any[];
+    if (yaTiene.length > 0) {
+      return { error: `Ya tiene acceso con el usuario "${yaTiene[0].usuario}".` };
+    }
+
+    // Usuario a partir del apellido y el lote: corto y facil de dictar.
+    const base = normalizarUsuario(`${r.apellido}${r.lote}`) || `lote${r.lote}`;
+    let usuario = base;
+    let n = 1;
+    while (((await sql`SELECT 1 FROM usuarios WHERE usuario = ${usuario} LIMIT 1`) as any[]).length > 0) {
+      usuario = `${base}${++n}`;
+    }
+
+    // 8 caracteres, sin los que se confunden al dictarlos (0/O, 1/l/I).
+    const abc = "abcdefghjkmnpqrstuvwxyz23456789";
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const clave = Array.from(bytes, (b) => abc[b % abc.length]).join("");
+
+    await sql`
+      INSERT INTO usuarios (usuario, descripcion, clave_hash, rol, residente_id, activo)
+      VALUES (${usuario}, ${`${r.apellido}, ${r.nombre} — Lote ${r.lote}`},
+              ${await hashearClave(clave)}, 'residente', ${residenteId}, TRUE)
+    `;
+
+    revalidatePath("/maestros");
+    return {
+      success: true,
+      usuario,
+      clave,
+      message: `Acceso creado para ${r.nombre} ${r.apellido}.`,
+    };
+  } catch (error: any) {
+    return { error: error.message || "No se pudo crear el acceso." };
+  }
+}
+
+/** Genera una contraseña nueva para un residente que la perdio. */
+export async function blanquearAccesoResidente(residenteId: number) {
+  const bloqueo = await exigirGestion();
+  if (bloqueo) return { error: bloqueo };
+
+  try {
+    const sql = getSql();
+    const filas = (await sql`
+      SELECT id, usuario FROM usuarios WHERE residente_id = ${residenteId} LIMIT 1
+    `) as any[];
+    if (filas.length === 0) return { error: "Ese residente no tiene acceso creado." };
+
+    const abc = "abcdefghjkmnpqrstuvwxyz23456789";
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const clave = Array.from(bytes, (b) => abc[b % abc.length]).join("");
+
+    await sql`UPDATE usuarios SET clave_hash = ${await hashearClave(clave)} WHERE id = ${filas[0].id}`;
+    // Se cierran las sesiones abiertas con la clave anterior.
+    await sql`DELETE FROM sesiones WHERE usuario_id = ${filas[0].id}`;
+
+    revalidatePath("/maestros");
+    return { success: true, usuario: filas[0].usuario, clave, message: "Contraseña regenerada." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+export async function quitarAccesoResidente(residenteId: number) {
+  const bloqueo = await exigirGestion();
+  if (bloqueo) return { error: bloqueo };
+
+  try {
+    const sql = getSql();
+    await sql`DELETE FROM usuarios WHERE residente_id = ${residenteId}`;
+    revalidatePath("/maestros");
+    return { success: true, message: "Acceso eliminado." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
+}
+
+/** Accesos existentes, indexados por residente, para pintar el maestro. */
+export async function getAccesosResidentes(): Promise<Record<number, string>> {
+  try {
+    if (await exigirGestion()) return {};
+    const filas = (await getSql()`
+      SELECT residente_id, usuario FROM usuarios
+      WHERE rol = 'residente' AND residente_id IS NOT NULL
+    `) as any[];
+
+    const mapa: Record<number, string> = {};
+    for (const f of filas) mapa[Number(f.residente_id)] = f.usuario;
+    return mapa;
+  } catch {
+    return {};
+  }
+}
+
+/** El residente cambia su propia contraseña. */
+export async function cambiarMiClave(prevState: any, formData: FormData) {
+  const sesion = await getSesionResidente();
+  if (!sesion) return { error: "Sesión no válida." };
+
+  const actual = String(formData.get("clave_actual") || "");
+  const nueva = String(formData.get("clave_nueva") || "");
+  const repetir = String(formData.get("clave_repetir") || "");
+
+  const problema = validarClave(nueva, LARGO_CLAVE_INGRESO);
+  if (problema) return { error: problema };
+  if (nueva !== repetir) return { error: "Las contraseñas nuevas no coinciden." };
+
+  try {
+    const sql = getSql();
+    const filas = (await sql`
+      SELECT clave_hash FROM usuarios WHERE id = ${sesion.usuarioId} LIMIT 1
+    `) as any[];
+
+    if (!filas[0] || !(await verificarClave(actual, filas[0].clave_hash))) {
+      return { error: "La contraseña actual es incorrecta." };
+    }
+
+    await sql`
+      UPDATE usuarios SET clave_hash = ${await hashearClave(nueva)} WHERE id = ${sesion.usuarioId}
+    `;
+    return { success: true, message: "Contraseña actualizada." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
 }
 
 // ========== ADMINISTRACION DE USUARIOS ==========

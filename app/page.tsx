@@ -465,6 +465,12 @@ function PantallaAccesos() {
               <Row label="Nombre" value={form.nombre} />
               <Row label="Apellido" value={form.apellido} />
               <Row label="DNI" value={form.dni} />
+              {resultado.lotesAutorizados.length > 0 && (
+                <Row
+                  label={resultado.lotesAutorizados.length > 1 ? "Lo autorizan" : "Lo autoriza"}
+                  value={`Lote ${resultado.lotesAutorizados.join(" · ")}`}
+                />
+              )}
               <Row label="Observaciones" value={resultado.persona!.observaciones || "—"} />
 
               {resultado.estado === "pendiente" && (

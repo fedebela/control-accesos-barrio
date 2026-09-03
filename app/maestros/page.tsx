@@ -10,6 +10,7 @@ import {
 } from "@/app/actions";
 import {
   getUsuarios, crearUsuario, cambiarClaveUsuario, activarUsuario, cambiarClaveGestion,
+  crearAccesoResidente, blanquearAccesoResidente, quitarAccesoResidente, getAccesosResidentes,
 } from "@/app/actions-auth";
 import BarraSesion from "@/app/components/BarraSesion";
 import { TURNOS, etiquetaTurno } from "@/lib/constantes";
@@ -636,6 +637,12 @@ function TabResidentes({ residentes, reload }: { residentes: any[]; reload: () =
   const [editR, setEditR] = useState<any>(null);
   const [rFoto, setRFoto] = useState("");
   const [msg, setMsg] = useState<any>(null);
+  const [accesos, setAccesos] = useState<Record<number, string>>({});
+  // La contraseña se muestra una sola vez, apenas se genera.
+  const [credencial, setCredencial] = useState<{ nombre: string; usuario: string; clave: string } | null>(null);
+
+  const cargarAccesos = () => getAccesosResidentes().then(setAccesos);
+  useEffect(() => { cargarAccesos(); }, [residentes.length]);
 
   useEffect(() => { if (resState?.success) { reload(); cancelar(); } }, [resState]);
 
@@ -689,26 +696,95 @@ function TabResidentes({ residentes, reload }: { residentes: any[]; reload: () =
         </div>
       </form>
 
-      <h3 style={styles.listTitle}>Residentes ({residentes.length})</h3>
-      {residentes.length === 0 && <p style={styles.empty}>Todavía no hay residentes cargados.</p>}
-      {residentes.map((r) => (
-        <div key={r.id} style={styles.listItem}>
-          <div style={styles.listMain}>
-            {r.foto_url ? <img src={r.foto_url} alt="" style={styles.thumb} /> : <div style={styles.thumbEmpty}>—</div>}
-            <div>
-              <strong>{r.apellido}, {r.nombre}</strong>
-              <div style={styles.listMeta}>
-                Lote {r.lote} · DNI {r.dni} · {r.rol === "inquilino" ? "Inquilino" : "Propietario"}
-                {r.telefono ? ` · ${r.telefono}` : ""}
-              </div>
-            </div>
+      {credencial && (
+        <div style={styles.credencial}>
+          <strong>Acceso de {credencial.nombre}</strong>
+          <p style={styles.credencialAviso}>
+            Anotá la contraseña ahora: no se puede volver a ver. Si se pierde,
+            se genera una nueva con «Blanquear».
+          </p>
+          <div style={styles.credencialDatos}>
+            <div><span style={styles.credencialLabel}>Usuario</span><code style={styles.code}>{credencial.usuario}</code></div>
+            <div><span style={styles.credencialLabel}>Contraseña</span><code style={styles.code}>{credencial.clave}</code></div>
           </div>
-          <div style={{ display: "flex", gap: "0.25rem" }}>
-            <button onClick={() => editar(r)} style={styles.editBtn}>Editar</button>
-            <button onClick={async () => { if (confirm(`¿Eliminar a ${r.nombre} ${r.apellido}?`)) { await deleteResidente(r.id); reload(); } }} style={styles.deleteBtn}>Eliminar</button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(
+                `Acceso a Registro de Accesos — Altos de la Horqueta\nUsuario: ${credencial.usuario}\nContraseña: ${credencial.clave}`
+              )}
+              style={styles.editBtn}
+            >
+              Copiar para WhatsApp
+            </button>
+            <button type="button" onClick={() => setCredencial(null)} style={styles.cancelBtn}>Cerrar</button>
           </div>
         </div>
-      ))}
+      )}
+
+      <h3 style={styles.listTitle}>Residentes ({residentes.length})</h3>
+      {residentes.length === 0 && <p style={styles.empty}>Todavía no hay residentes cargados.</p>}
+      {residentes.map((r) => {
+        const acceso = accesos[r.id];
+        return (
+          <div key={r.id} style={styles.listItem}>
+            <div style={styles.listMain}>
+              {r.foto_url ? <img src={r.foto_url} alt="" style={styles.thumb} /> : <div style={styles.thumbEmpty}>—</div>}
+              <div>
+                <strong>{r.apellido}, {r.nombre}</strong>
+                {acceso && <span style={{ ...styles.badge, background: "#dbeafe", color: "#1e40af" }}>ACCESO: {acceso}</span>}
+                <div style={styles.listMeta}>
+                  Lote {r.lote} · DNI {r.dni} · {r.rol === "inquilino" ? "Inquilino" : "Propietario"}
+                  {r.telefono ? ` · ${r.telefono}` : ""}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+              {acceso ? (
+                <>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`¿Generar una contraseña nueva para ${r.nombre}? La actual deja de servir.`)) return;
+                      const res = await blanquearAccesoResidente(r.id);
+                      if (res.success) setCredencial({ nombre: `${r.nombre} ${r.apellido}`, usuario: res.usuario!, clave: res.clave! });
+                      else setMsg(res);
+                    }}
+                    style={styles.editBtn}
+                  >
+                    Blanquear
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`¿Quitarle el acceso a ${r.nombre}?`)) return;
+                      const res = await quitarAccesoResidente(r.id);
+                      setMsg(res);
+                      cargarAccesos();
+                    }}
+                    style={styles.deleteBtn}
+                  >
+                    Quitar acceso
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={async () => {
+                    const res = await crearAccesoResidente(r.id);
+                    if (res.success) {
+                      setCredencial({ nombre: `${r.nombre} ${r.apellido}`, usuario: res.usuario!, clave: res.clave! });
+                      cargarAccesos();
+                    } else setMsg(res);
+                  }}
+                  style={styles.addBtn}
+                >
+                  Crear acceso
+                </button>
+              )}
+              <button onClick={() => editar(r)} style={styles.editBtn}>Editar</button>
+              <button onClick={async () => { if (confirm(`¿Eliminar a ${r.nombre} ${r.apellido}?`)) { await deleteResidente(r.id); reload(); } }} style={styles.deleteBtn}>Eliminar</button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -736,6 +812,11 @@ const styles: Record<string, React.CSSProperties> = {
 
   form: { display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" },
   formEmbebido: { display: "flex", flexDirection: "column", gap: "0.5rem", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.6rem", padding: "0.85rem", marginBottom: "1rem" },
+  credencial: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.7rem", padding: "1rem", marginBottom: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" },
+  credencialAviso: { fontSize: "0.85rem", color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: "0.5rem", padding: "0.5rem 0.7rem", margin: 0, fontWeight: 600 },
+  credencialDatos: { display: "flex", gap: "1.5rem", flexWrap: "wrap" },
+  credencialLabel: { display: "block", fontSize: "0.75rem", color: "#64748b", fontWeight: 700, marginBottom: "0.15rem" },
+  code: { fontFamily: "ui-monospace, monospace", fontSize: "1.05rem", fontWeight: 700, color: "#0f172a", background: "#fff", padding: "0.3rem 0.6rem", borderRadius: "0.4rem", border: "1px solid #cbd5e1", letterSpacing: "0.05em" },
   formRow: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
   field: { display: "flex", flexDirection: "column", gap: "0.3rem", flex: 1, minWidth: 150 },
   label: { fontSize: "0.85rem", fontWeight: 700, color: "#374151" },

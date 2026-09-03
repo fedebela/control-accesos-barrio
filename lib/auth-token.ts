@@ -11,10 +11,14 @@
  * `sesiones`, que es lo que permite cerrar una sesion a distancia.
  */
 
+export type RolUsuario = "puesto" | "residente";
+
 export type PayloadSesion = {
   sid: string;
   uid: number;
   usuario: string;
+  /** puesto = guardia · residente = entra desde su celular, solo su lote */
+  rol: RolUsuario;
   /** true si en esta sesion ya se ingreso la clave de gestion */
   gestion: boolean;
   /** vencimiento en segundos desde epoch */
@@ -85,5 +89,11 @@ export async function verificarSesion(token: string | undefined | null): Promise
   }
 }
 
-/** Duracion de la sesion: alcanza para cubrir un turno completo. */
+/** Duracion de la sesion del puesto: cubre un turno completo. */
 export const HORAS_SESION = 14;
+
+/**
+ * El residente entra desde el celular cada tanto y no tiene sentido pedirle
+ * la clave cada vez. El alcance de lo que puede hacer es acotado a su lote.
+ */
+export const HORAS_SESION_RESIDENTE = 24 * 30;

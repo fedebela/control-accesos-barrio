@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { ensureTables, getSql } from "@/lib/db";
-import { exigirGestion } from "@/app/actions-auth";
+import { exigirGestion, getSesionResidente } from "@/app/actions-auth";
 
 // ========== TYPES ==========
 
@@ -108,6 +108,8 @@ export type ResultadoBusqueda = {
   apellidosDeLotes: Record<string, string>;
   /** Rubro de proveedor usado la ultima vez. */
   subtipoPrevio: string;
+  /** Lotes que hoy tienen una autorizacion vigente para esta persona. */
+  lotesAutorizados: string[];
 };
 
 // ========== IDENTIDAD (tabla personas) ==========
@@ -175,6 +177,208 @@ async function upsertPersona(
     ON CONFLICT (dni) DO UPDATE SET
       foto_url = COALESCE(NULLIF(personas.foto_url, ''), EXCLUDED.foto_url)
   `;
+}
+
+// ========== PANTALLA DEL RESIDENTE ==========
+
+export type PersonaDeMiLote = {
+  dni: string;
+  nombre: string;
+  apellido: string;
+  foto_url: string;
+  tipo: string;
+  subtipo: string;
+  patente: string;
+  ultimaVisita: string;
+  visitas: number;
+  estado: EstadoAutorizacion;
+  /** Estado respecto del lote del residente, no de otros lotes */
+  autorizadoAqui: boolean;
+  tipoAutorizacion: string;
+};
+
+/**
+ * Personas que alguna vez ingresaron al lote del residente.
+ *
+ * Es todo lo que el residente puede ver: nunca el padron completo del barrio.
+ * Que no pueda averiguar quien visita a sus vecinos no es un detalle, es lo
+ * que hace aceptable darle acceso.
+ */
+export async function getPersonasDeMiLote(): Promise<PersonaDeMiLote[]> {
+  const sesion = await getSesionResidente();
+  if (!sesion) return [];
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const lote = sesion.lote.toLowerCase();
+
+    const filas = (await sql`
+      SELECT p.dni, p.nombre, p.apellido, COALESCE(p.foto_url, '') AS foto_url,
+             v.tipo, COALESCE(v.subtipo, '') AS subtipo, COALESCE(v.patente, '') AS patente,
+             v.ultima_visita, v.visitas,
+             COALESCE((
+               SELECT json_agg(json_build_object(
+                 'tipo', a.tipo, 'autorizado', a.autorizado, 'usada', a.usada,
+                 'fecha_expiracion', a.fecha_expiracion, 'lote', COALESCE(a.lote, '')
+               ))
+               FROM autorizados a WHERE a.dni = p.dni
+             ), '[]'::json) AS autorizaciones
+      FROM personas p
+      JOIN (
+        SELECT r.dni,
+               MAX(r.fecha_hora) AS ultima_visita,
+               COUNT(*) FILTER (WHERE r.es_entrada) AS visitas,
+               (ARRAY_AGG(r.tipo ORDER BY r.fecha_hora DESC))[1] AS tipo,
+               (ARRAY_AGG(r.subtipo ORDER BY r.fecha_hora DESC))[1] AS subtipo,
+               (ARRAY_AGG(r.patente ORDER BY r.fecha_hora DESC))[1] AS patente
+        FROM registros r
+        WHERE r.es_entrada = TRUE
+          AND (
+            lower(COALESCE(r.lote_destino, '')) = ${lote}
+            OR EXISTS (
+              SELECT 1 FROM registro_lotes rl
+              WHERE rl.registro_id = r.id AND lower(rl.lote) = ${lote}
+            )
+          )
+        GROUP BY r.dni
+      ) v ON v.dni = p.dni
+      LEFT JOIN residentes res ON res.dni = p.dni
+      WHERE res.dni IS NULL
+      ORDER BY v.ultima_visita DESC
+      LIMIT 300
+    `) as any[];
+
+    return filas.map((f) => {
+      const autorizaciones = (f.autorizaciones || []) as Autorizacion[];
+      const general = resolverEstado({ esResidente: false, autorizaciones, tieneRegistro: true });
+      const enMiLote = resolverEstado({
+        esResidente: false,
+        autorizaciones,
+        tieneRegistro: true,
+        lotesDelMovimiento: [sesion.lote],
+      });
+
+      const propia = autorizaciones.find(
+        (a) => String(a.lote || "").toLowerCase() === lote && !a.usada && a.autorizado
+      );
+
+      return {
+        dni: f.dni,
+        nombre: f.nombre,
+        apellido: f.apellido,
+        foto_url: f.foto_url,
+        tipo: f.tipo || "visita",
+        subtipo: f.subtipo || "",
+        patente: f.patente || "",
+        ultimaVisita: f.ultima_visita,
+        visitas: Number(f.visitas || 0),
+        estado: general.estado,
+        autorizadoAqui: enMiLote.autorizado,
+        tipoAutorizacion: propia ? propia.tipo : "",
+      };
+    });
+  } catch (error) {
+    console.error("Error al obtener personas del lote:", error);
+    return [];
+  }
+}
+
+/** El residente autoriza para SU lote. No puede tocar el de otro. */
+export async function autorizarDesdeResidente(prevState: any, formData: FormData) {
+  const sesion = await getSesionResidente();
+  if (!sesion) return { error: "Sesión no válida. Volvé a iniciar sesión." };
+
+  const dnis = formData.getAll("dni").map((d) => String(d).trim()).filter(Boolean);
+  const tipo = String(formData.get("tipo") || "").trim();
+  const observaciones = String(formData.get("observaciones") || "").trim();
+
+  if (dnis.length === 0) return { error: "No hay personas en la lista." };
+  if (tipo !== "permanente" && tipo !== "temporal") {
+    return { error: "Tipo de autorización inválido." };
+  }
+
+  const esTemporal = tipo === "temporal";
+  const lote = sesion.lote;
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+    let otorgados = 0;
+
+    for (const dni of dnis) {
+      // Solo puede autorizar a quien ya visito su lote.
+      const visito = (await sql`
+        SELECT 1 FROM registros r
+        WHERE r.dni = ${dni} AND r.es_entrada = TRUE
+          AND (
+            lower(COALESCE(r.lote_destino, '')) = ${lote.toLowerCase()}
+            OR EXISTS (
+              SELECT 1 FROM registro_lotes rl
+              WHERE rl.registro_id = r.id AND lower(rl.lote) = ${lote.toLowerCase()}
+            )
+          )
+        LIMIT 1
+      `) as any[];
+      if (visito.length === 0) continue;
+
+      const identidad = await getPersona(sql, dni);
+      if (!identidad) continue;
+
+      const ultimo = (await sql`
+        SELECT patente FROM registros WHERE dni = ${dni}
+        ORDER BY fecha_hora DESC LIMIT 1
+      `) as any[];
+
+      await sql`
+        DELETE FROM autorizados
+        WHERE dni = ${dni} AND lower(COALESCE(lote, '')) = ${lote.toLowerCase()} AND usada = FALSE
+      `;
+
+      await sql`
+        INSERT INTO autorizados
+          (nombre, apellido, dni, tipo, observaciones, patente, lote, residente_nombre,
+           autorizado, un_solo_uso, usada, foto_url)
+        VALUES
+          (${identidad.nombre}, ${identidad.apellido}, ${dni}, ${tipo}, ${observaciones},
+           ${ultimo[0]?.patente || null}, ${lote}, ${sesion.descripcion || sesion.usuario},
+           TRUE, ${esTemporal}, FALSE, ${identidad.foto_url || null})
+      `;
+      otorgados++;
+    }
+
+    if (otorgados === 0) return { error: "No se pudo autorizar a nadie de la lista." };
+
+    revalidatePath("/residente");
+    revalidatePath("/");
+    return {
+      success: true,
+      message:
+        `Autorizaste a ${otorgados} persona${otorgados > 1 ? "s" : ""} para el lote ${lote}` +
+        (esTemporal ? ", por única vez." : ", de forma permanente."),
+    };
+  } catch (error: any) {
+    return { error: error.message || "No se pudo otorgar la autorización." };
+  }
+}
+
+/** El residente revoca solo la autorizacion de su lote. */
+export async function revocarDesdeResidente(dni: string) {
+  const sesion = await getSesionResidente();
+  if (!sesion) return { error: "Sesión no válida." };
+
+  try {
+    await ensureTables();
+    await getSql()`
+      DELETE FROM autorizados
+      WHERE dni = ${dni} AND lower(COALESCE(lote, '')) = ${sesion.lote.toLowerCase()}
+    `;
+    revalidatePath("/residente");
+    revalidatePath("/");
+    return { success: true, message: "Autorización revocada." };
+  } catch (error: any) {
+    return { error: error.message };
+  }
 }
 
 // ========== IMPORTACION DESDE PLANILLA ==========
@@ -485,30 +689,88 @@ export async function deleteOperador(id: number) {
  * La usan la busqueda por DNI, el buscador de la pantalla de autorizados
  * y la validacion del servidor al registrar una entrada.
  */
+export type Autorizacion = {
+  tipo: string;
+  autorizado: boolean;
+  usada: boolean;
+  fecha_expiracion: any;
+  lote: string;
+};
+
+/** Una autorizacion sirve si esta confirmada, sin usar y sin vencer. */
+function autorizacionVigente(a: Autorizacion): boolean {
+  if (a.usada || !a.autorizado) return false;
+  if (a.fecha_expiracion) {
+    const hoy = new Date();
+    const limite = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+    if (new Date(a.fecha_expiracion) < limite) return false;
+  }
+  return true;
+}
+
+/**
+ * Estado de una persona a partir de TODAS sus autorizaciones.
+ *
+ * Una persona puede estar autorizada por varios lotes al mismo tiempo y cada
+ * autorizacion es independiente. Alcanza con una vigente para poder ingresar.
+ * Si `lotesDelMovimiento` viene con datos, solo cuentan las autorizaciones de
+ * esos lotes: estar autorizado por el 142 no habilita a entrar al 88.
+ */
 function resolverEstado(datos: {
   esResidente: boolean;
-  auth: { tipo: string; autorizado: boolean; usada: boolean; fecha_expiracion: any } | null;
+  autorizaciones: Autorizacion[];
   tieneRegistro: boolean;
-}): { estado: EstadoAutorizacion; autorizado: boolean } {
-  if (datos.esResidente) return { estado: "residente", autorizado: true };
-
-  const a = datos.auth;
-  if (a) {
-    if (a.usada) return { estado: "usada", autorizado: false };
-    if (!a.autorizado) return { estado: "pendiente", autorizado: false };
-
-    if (a.fecha_expiracion) {
-      const hoy = new Date();
-      const limite = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-      if (new Date(a.fecha_expiracion) < limite) return { estado: "vencida", autorizado: false };
-    }
-
-    if (a.tipo === "permanente") return { estado: "permanente", autorizado: true };
-    return { estado: "temporal", autorizado: true };
+  lotesDelMovimiento?: string[];
+}): { estado: EstadoAutorizacion; autorizado: boolean; lotesAutorizados: string[] } {
+  if (datos.esResidente) {
+    return { estado: "residente", autorizado: true, lotesAutorizados: [] };
   }
 
-  if (datos.tieneRegistro) return { estado: "previo", autorizado: false };
-  return { estado: "no_registrado", autorizado: false };
+  let candidatas = datos.autorizaciones || [];
+
+  if (datos.lotesDelMovimiento?.length) {
+    const buscados = new Set(datos.lotesDelMovimiento.map((l) => l.trim().toLowerCase()));
+    candidatas = candidatas.filter((a) => buscados.has(String(a.lote || "").trim().toLowerCase()));
+  }
+
+  const vigentes = candidatas.filter(autorizacionVigente);
+
+  if (vigentes.length > 0) {
+    const lotesAutorizados = vigentes.map((a) => a.lote).filter(Boolean);
+    // Permanente manda sobre temporal: es la condicion mas estable.
+    const permanente = vigentes.some((a) => a.tipo === "permanente");
+    return {
+      estado: permanente ? "permanente" : "temporal",
+      autorizado: true,
+      lotesAutorizados,
+    };
+  }
+
+  // Sin ninguna vigente, se informa el motivo mas util de las que existan.
+  if (candidatas.length > 0) {
+    if (candidatas.some((a) => !a.autorizado && !a.usada)) {
+      return { estado: "pendiente", autorizado: false, lotesAutorizados: [] };
+    }
+    if (candidatas.some((a) => a.usada)) {
+      return { estado: "usada", autorizado: false, lotesAutorizados: [] };
+    }
+    return { estado: "vencida", autorizado: false, lotesAutorizados: [] };
+  }
+
+  if (datos.tieneRegistro) return { estado: "previo", autorizado: false, lotesAutorizados: [] };
+  return { estado: "no_registrado", autorizado: false, lotesAutorizados: [] };
+}
+
+/** Todas las autorizaciones cargadas de un DNI. */
+async function autorizacionesDe(
+  sql: ReturnType<typeof getSql>,
+  dni: string
+): Promise<Autorizacion[]> {
+  return (await sql`
+    SELECT tipo, autorizado, usada, fecha_expiracion, COALESCE(lote, '') AS lote
+    FROM autorizados WHERE dni = ${dni}
+    ORDER BY usada ASC, created_at DESC
+  `) as unknown as Autorizacion[];
 }
 
 // ========== HELPERS ==========
@@ -732,7 +994,12 @@ export async function autorizarPersonas(prevState: any, formData: FormData) {
 
       const patente = previa[0]?.patente || ultimoRegistro[0]?.patente || null;
 
-      await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
+      // Se reemplaza SOLO la autorizacion de este lote. Las de otros lotes
+      // quedan intactas: cada residente maneja la suya.
+      await sql`
+        DELETE FROM autorizados
+        WHERE dni = ${dni} AND lower(COALESCE(lote, '')) = ${lote.toLowerCase()} AND usada = FALSE
+      `;
 
       await sql`
         INSERT INTO autorizados
@@ -780,17 +1047,16 @@ export async function buscarPersonas(consulta: string) {
     const filas = (await sql`
       SELECT p.dni, p.nombre, p.apellido, p.foto_url,
              (r.dni IS NOT NULL) AS es_residente,
-             a.tipo AS auth_tipo, a.autorizado AS auth_autorizado,
-             a.usada AS auth_usada, a.un_solo_uso AS auth_un_solo_uso,
-             a.fecha_expiracion AS auth_expira, a.lote AS auth_lote,
-             ur.lote_destino AS lote_ultimo
+             ur.lote_destino AS lote_ultimo,
+             COALESCE((
+               SELECT json_agg(json_build_object(
+                 'tipo', a.tipo, 'autorizado', a.autorizado, 'usada', a.usada,
+                 'fecha_expiracion', a.fecha_expiracion, 'lote', COALESCE(a.lote, '')
+               ))
+               FROM autorizados a WHERE a.dni = p.dni
+             ), '[]'::json) AS autorizaciones
       FROM personas p
       LEFT JOIN residentes r ON r.dni = p.dni
-      LEFT JOIN LATERAL (
-        SELECT tipo, autorizado, usada, un_solo_uso, fecha_expiracion, lote
-        FROM autorizados WHERE dni = p.dni
-        ORDER BY usada ASC, created_at DESC LIMIT 1
-      ) a ON TRUE
       LEFT JOIN LATERAL (
         SELECT lote_destino FROM registros WHERE dni = p.dni
         ORDER BY fecha_hora DESC LIMIT 1
@@ -802,25 +1068,24 @@ export async function buscarPersonas(consulta: string) {
       LIMIT 40
     `) as any[];
 
-    return filas.map((f) => ({
-      dni: f.dni as string,
-      nombre: f.nombre as string,
-      apellido: f.apellido as string,
-      foto_url: (f.foto_url || "") as string,
-      lote: (f.auth_lote || f.lote_ultimo || "") as string,
-      estado: resolverEstado({
+    return filas.map((f) => {
+      const autorizaciones = (f.autorizaciones || []) as Autorizacion[];
+      const r = resolverEstado({
         esResidente: Boolean(f.es_residente),
-        auth: f.auth_tipo
-          ? {
-              tipo: f.auth_tipo,
-              autorizado: f.auth_autorizado,
-              usada: f.auth_usada,
-              fecha_expiracion: f.auth_expira,
-            }
-          : null,
+        autorizaciones,
         tieneRegistro: Boolean(f.lote_ultimo),
-      }).estado,
-    }));
+      });
+
+      return {
+        dni: f.dni as string,
+        nombre: f.nombre as string,
+        apellido: f.apellido as string,
+        foto_url: (f.foto_url || "") as string,
+        lote: (r.lotesAutorizados[0] || f.lote_ultimo || "") as string,
+        estado: r.estado,
+        lotesAutorizados: r.lotesAutorizados,
+      };
+    });
   } catch (error) {
     console.error("Error al buscar personas:", error);
     return [];
@@ -831,12 +1096,23 @@ export async function buscarPersonas(consulta: string) {
  * Quita la autorizacion de un DNI. Los registros de ingreso NO se tocan:
  * la persona sigue existiendo en la bitacora, solo pierde el permiso.
  */
-export async function revocarAutorizacion(dni: string) {
+export async function revocarAutorizacion(dni: string, lote?: string) {
   try {
     await ensureTables();
     const sql = getSql();
-    await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
+
+    // Con lote se revoca solo la de ese lote; sin lote, todas.
+    if (lote?.trim()) {
+      await sql`
+        DELETE FROM autorizados
+        WHERE dni = ${dni} AND lower(COALESCE(lote, '')) = ${lote.trim().toLowerCase()}
+      `;
+    } else {
+      await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
+    }
+
     revalidatePath("/maestros");
+    revalidatePath("/residente");
     revalidatePath("/");
     return { success: true, message: "Autorización revocada." };
   } catch (error: any) {
@@ -880,6 +1156,7 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     lotesUltimoRegistro: [],
     apellidosDeLotes: {},
     subtipoPrevio: "",
+    lotesAutorizados: [],
   };
 
   const dniLimpio = String(dni || "").trim();
@@ -907,14 +1184,14 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
         FROM residentes WHERE dni = ${dniLimpio} LIMIT 1
       ` as unknown as Promise<any[]>,
       sql`
-        SELECT a.id, a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente, a.lote,
+        SELECT a.id, a.nombre, a.apellido, a.dni, a.tipo, a.observaciones, a.patente,
+               COALESCE(a.lote, '') AS lote,
                a.autorizado, a.un_solo_uso, a.usada, a.fecha_expiracion, a.foto_url,
                COALESCE(a.residente_nombre, r.nombre || ' ' || r.apellido) AS residente_nombre
         FROM autorizados a
         LEFT JOIN residentes r ON r.id = a.residente_id
         WHERE a.dni = ${dniLimpio}
         ORDER BY a.usada ASC, a.created_at DESC
-        LIMIT 1
       ` as unknown as Promise<any[]>,
       sql`
         SELECT dni, nombre, apellido, foto_url
@@ -925,10 +1202,12 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     const ultimoRegistro = registros[0] || null;
     const ultimaEntrada = entradas[0] || null;
     const residente = residentes[0] || null;
-    const auth = autorizaciones[0] || null;
+    // La primera vigente sirve para los datos de contacto (lote, patente);
+    // el estado se calcula con todas.
+    const auth = autorizaciones.find((a) => !a.usada && a.autorizado) || autorizaciones[0] || null;
     const identidad = identidades[0] || null;
 
-    if (!ultimoRegistro && !residente && !auth && !identidad) return vacio;
+    if (!ultimoRegistro && !residente && autorizaciones.length === 0 && !identidad) return vacio;
 
     // --- Identidad: `personas` es la fuente unica de nombre, apellido y foto.
     // El resto de los campos (lote, patente, observaciones) si salen del
@@ -945,9 +1224,9 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       foto_url: identidad?.foto_url || residente?.foto_url || auth?.foto_url || ultimoRegistro?.foto_url || "",
     };
 
-    const { estado, autorizado } = resolverEstado({
+    const { estado, autorizado, lotesAutorizados } = resolverEstado({
       esResidente: Boolean(residente),
-      auth,
+      autorizaciones: autorizaciones as unknown as Autorizacion[],
       tieneRegistro: Boolean(ultimoRegistro),
     });
 
@@ -985,6 +1264,7 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       lotesUltimoRegistro,
       apellidosDeLotes,
       subtipoPrevio: ultimaEntrada?.subtipo || ultimoRegistro?.subtipo || "",
+      lotesAutorizados,
     };
   } catch (error) {
     console.error("Error al buscar persona:", error);
@@ -999,21 +1279,24 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
  * Se usa tanto para el badge de la pantalla como para validar en el servidor,
  * asi que la UI no puede saltearse el control.
  */
-async function tieneAutorizacionVigente(sql: ReturnType<typeof getSql>, dni: string) {
+/**
+ * Si la persona puede ingresar por los lotes de este movimiento.
+ * Estar autorizado por un lote no habilita a entrar a otro.
+ */
+async function tieneAutorizacionVigente(
+  sql: ReturnType<typeof getSql>,
+  dni: string,
+  lotes: string[]
+) {
   const residente = (await sql`
     SELECT 1 FROM residentes WHERE dni = ${dni} LIMIT 1
   `) as any[];
 
-  const filas = (await sql`
-    SELECT tipo, autorizado, usada, fecha_expiracion
-    FROM autorizados WHERE dni = ${dni}
-    ORDER BY usada ASC, created_at DESC LIMIT 1
-  `) as any[];
-
   return resolverEstado({
     esResidente: residente.length > 0,
-    auth: filas[0] || null,
+    autorizaciones: await autorizacionesDe(sql, dni),
     tieneRegistro: false,
+    lotesDelMovimiento: lotes,
   }).autorizado;
 }
 
@@ -1179,7 +1462,7 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       // ---- Sin autorizacion vigente no se puede ingresar ----
       // Hay que conseguir el visto bueno del residente por telefono o WhatsApp
       // y dejar asentado quien lo dio.
-      const autorizada = await tieneAutorizacionVigente(sql, dni);
+      const autorizada = await tieneAutorizacionVigente(sql, dni, lotes);
       if (!autorizada) {
         if (!autorizacion_medio || !autorizado_por) {
           return {
@@ -1271,17 +1554,24 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
       `;
     }
 
-    // Una autorizacion de unica vez se consume al registrar la entrada.
+    // La autorizacion de unica vez se consume al entrar, pero SOLO la de los
+    // lotes de este movimiento: si el 142 lo autorizo por unica vez y entra
+    // por el 88, la del 142 sigue disponible.
     let mensajeExtra = "";
     if (es_entrada) {
       const consumidas = (await sql`
         UPDATE autorizados
         SET usada = TRUE
-        WHERE dni = ${dni} AND un_solo_uso = TRUE AND autorizado = TRUE AND usada = FALSE
-        RETURNING id
+        WHERE dni = ${dni}
+          AND un_solo_uso = TRUE AND autorizado = TRUE AND usada = FALSE
+          AND lower(COALESCE(lote, '')) = ANY(${lotes.map((l) => l.toLowerCase())})
+        RETURNING lote
       `) as any[];
-      if (consumidas.length > 0) {
-        mensajeExtra = " La autorización de única vez quedó consumida.";
+
+      if (consumidas.length === 1) {
+        mensajeExtra = ` Se consumió la autorización de única vez del lote ${consumidas[0].lote}.`;
+      } else if (consumidas.length > 1) {
+        mensajeExtra = ` Se consumieron las autorizaciones de única vez de los lotes ${consumidas.map((c) => c.lote).join(", ")}.`;
       }
     }
 
