@@ -14,8 +14,23 @@ type Col = {
   valor: (r: any) => string;
 };
 
+/** "hace 3 h 20 min" — para ver de un vistazo cuánto lleva adentro un proveedor. */
+function transcurrido(desde: string): string {
+  const min = Math.floor((Date.now() - new Date(desde).getTime()) / 60000);
+  if (min < 1) return "recién";
+  if (min < 60) return `${min} min`;
+
+  const horas = Math.floor(min / 60);
+  const resto = min % 60;
+  if (horas < 24) return resto ? `${horas} h ${resto} min` : `${horas} h`;
+
+  const dias = Math.floor(horas / 24);
+  return dias === 1 ? `1 día ${horas % 24} h` : `${dias} días`;
+}
+
 const COLUMNAS: Col[] = [
   { id: "fecha",     titulo: "Fecha/Hora",     valor: (r) => new Date(r.fecha_hora).toLocaleString("es-AR") },
+  { id: "hace",      titulo: "Hace",           valor: (r) => transcurrido(r.fecha_hora) },
   { id: "movimiento", titulo: "Movimiento",    valor: (r) => (r.es_entrada ? "Entrada" : "Salida") },
   { id: "apellido",  titulo: "Apellido",       valor: (r) => r.apellido || "" },
   { id: "nombre",    titulo: "Nombre",         valor: (r) => r.nombre || "" },
@@ -42,7 +57,7 @@ const hoyISO = () => new Date().toISOString().slice(0, 10);
 const FILTROS_VACIOS: FiltrosInforme = {
   desde: hoyISO(), hasta: hoyISO(), dni: "", texto: "", lote: "",
   tipo: "", subtipo: "", patente: "", operador: "", movimiento: "",
-  soloManuales: false, soloSinAutorizacion: false,
+  soloManuales: false, soloSinAutorizacion: false, soloProveedoresSinSalida: false,
 };
 
 export default function InformesPage() {
@@ -159,7 +174,12 @@ export default function InformesPage() {
             <input type="date" value={filtros.hasta || ""} onChange={(e) => set("hasta", e.target.value)} style={styles.input} />
           </Campo>
           <Campo label="Movimiento">
-            <select value={filtros.movimiento || ""} onChange={(e) => set("movimiento", e.target.value)} style={styles.input}>
+            <select
+              value={filtros.movimiento || ""}
+              onChange={(e) => set("movimiento", e.target.value)}
+              style={styles.input}
+              disabled={!!filtros.soloProveedoresSinSalida}
+            >
               <option value="">Entradas y salidas</option>
               <option value="entrada">Solo entradas</option>
               <option value="salida">Solo salidas</option>
@@ -188,6 +208,7 @@ export default function InformesPage() {
               value={filtros.tipo || ""}
               onChange={(e) => { set("tipo", e.target.value); if (e.target.value !== "proveedor") set("subtipo", ""); }}
               style={styles.input}
+              disabled={!!filtros.soloProveedoresSinSalida}
             >
               <option value="">Todos</option>
               {TIPOS.map((t) => <option key={t.valor} value={t.valor}>{t.etiqueta}</option>)}
@@ -228,6 +249,31 @@ export default function InformesPage() {
           </label>
         </div>
 
+        <label style={filtros.soloProveedoresSinSalida ? styles.checkDestacadoOn : styles.checkDestacado}>
+          <input
+            type="checkbox"
+            checked={!!filtros.soloProveedoresSinSalida}
+            onChange={(e) => {
+              const v = e.target.checked;
+              setFiltros((f) => ({
+                ...f,
+                soloProveedoresSinSalida: v,
+                // El filtro ya implica proveedores y entradas.
+                ...(v ? { tipo: "proveedor", movimiento: "entrada" } : {}),
+              }));
+              // El tiempo transcurrido es justamente lo que se quiere mirar acá.
+              if (v) setVisibles((s) => new Set(s).add("hace"));
+            }}
+          />
+          <span>
+            <strong>Proveedores sin salida registrada</strong>
+            <span style={styles.checkAyuda}>
+              Entradas de proveedores que nunca registraron la salida. No aplica a visitas:
+              pueden retirarse con el propietario o en otro vehículo.
+            </span>
+          </span>
+        </label>
+
         <div style={styles.acciones}>
           <button onClick={() => consultar()} disabled={cargando} style={styles.btnPrimario}>
             {cargando ? "Consultando…" : "Consultar"}
@@ -264,6 +310,20 @@ export default function InformesPage() {
           <Total label="Salidas" valor={totales.salidas} />
           <Total label="Proveedores" valor={totales.proveedores} />
         </div>
+
+        {filtros.soloProveedoresSinSalida && registros.length > 0 && (
+          <div style={styles.alertaSinSalida}>
+            {registros.length === 1
+              ? "1 proveedor entró y no registró la salida."
+              : `${registros.length} proveedores entraron y no registraron la salida.`}
+            {" "}Revisá la columna «Hace» para ver desde cuándo.
+          </div>
+        )}
+        {filtros.soloProveedoresSinSalida && registros.length === 0 && !cargando && (
+          <div style={styles.alertaOk}>
+            Todos los proveedores del período registraron su salida.
+          </div>
+        )}
 
         <p style={styles.nota} className="no-print">
           Los movimientos no se pueden editar ni eliminar. Si alguno se cargó mal,
@@ -360,6 +420,9 @@ const styles: Record<string, React.CSSProperties> = {
 
   checksRow: { display: "flex", gap: "1.25rem", flexWrap: "wrap", marginTop: "0.85rem" },
   check: { fontSize: "0.85rem", color: "#475569", display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" },
+  checkDestacado: { display: "flex", alignItems: "flex-start", gap: "0.55rem", marginTop: "0.85rem", padding: "0.7rem 0.85rem", borderRadius: "0.6rem", border: "1px solid #e2e8f0", background: "#f8fafc", cursor: "pointer", fontSize: "0.88rem", color: "#334155" },
+  checkDestacadoOn: { display: "flex", alignItems: "flex-start", gap: "0.55rem", marginTop: "0.85rem", padding: "0.7rem 0.85rem", borderRadius: "0.6rem", border: "1px solid #fcd34d", background: "#fffbeb", cursor: "pointer", fontSize: "0.88rem", color: "#92400e" },
+  checkAyuda: { display: "block", fontSize: "0.8rem", color: "#64748b", marginTop: "0.2rem", lineHeight: 1.45 },
 
   acciones: { display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "1rem" },
   btnPrimario: { padding: "0.7rem 1.3rem", borderRadius: "0.6rem", border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer" },
@@ -374,6 +437,8 @@ const styles: Record<string, React.CSSProperties> = {
   totalValor: { fontSize: "1.5rem", fontWeight: 800, color: "#0f172a" },
 
   nota: { fontSize: "0.82rem", color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.5rem", padding: "0.55rem 0.75rem", marginBottom: "1rem", lineHeight: 1.5 },
+  alertaSinSalida: { fontSize: "0.92rem", color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: "0.5rem", padding: "0.7rem 0.85rem", marginBottom: "0.85rem", fontWeight: 700 },
+  alertaOk: { fontSize: "0.92rem", color: "#166534", background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: "0.5rem", padding: "0.7rem 0.85rem", marginBottom: "0.85rem", fontWeight: 700 },
   empty: { color: "#94a3b8", fontStyle: "italic" },
   avisoLimite: { fontSize: "0.82rem", color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: "0.5rem", padding: "0.55rem 0.75rem", marginTop: "0.85rem", fontWeight: 600 },
 

@@ -1367,6 +1367,12 @@ export type FiltrosInforme = {
   movimiento?: string; // "entrada" | "salida" | ""
   soloManuales?: boolean;
   soloSinAutorizacion?: boolean;
+  /**
+   * Entradas de proveedores que nunca registraron la salida.
+   * Solo aplica a proveedores: una visita puede irse con el propietario o en
+   * otro auto, asi que no tiene sentido controlarle la salida.
+   */
+  soloProveedoresSinSalida?: boolean;
 };
 
 export type RegistroInforme = Registro & { lotes: string };
@@ -1414,6 +1420,28 @@ export async function getRegistrosFiltrados(f: FiltrosInforme): Promise<Registro
         AND (${esEntrada}::boolean IS NULL OR r.es_entrada = ${esEntrada})
         AND (${f.soloManuales ? true : null}::boolean IS NULL OR r.es_manual = TRUE)
         AND (${f.soloSinAutorizacion ? true : null}::boolean IS NULL OR r.autorizado_por IS NOT NULL)
+        AND (
+          ${f.soloProveedoresSinSalida ? true : null}::boolean IS NULL
+          OR (
+            r.tipo = 'proveedor'
+            AND r.es_entrada = TRUE
+            -- Queda "sin salida" si no hay una salida posterior a esta entrada
+            -- y anterior a la siguiente entrada del mismo DNI. Asi se detectan
+            -- tanto al que sigue adentro como entradas viejas sin cerrar.
+            AND NOT EXISTS (
+              SELECT 1 FROM registros s
+              WHERE s.dni = r.dni
+                AND s.es_entrada = FALSE
+                AND s.fecha_hora > r.fecha_hora
+                AND s.fecha_hora < COALESCE((
+                  SELECT MIN(e.fecha_hora) FROM registros e
+                  WHERE e.dni = r.dni
+                    AND e.es_entrada = TRUE
+                    AND e.fecha_hora > r.fecha_hora
+                ), 'infinity'::timestamptz)
+            )
+          )
+        )
         AND (
           ${lote}::text IS NULL
           OR r.lote_destino = ${lote}
