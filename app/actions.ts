@@ -172,6 +172,170 @@ async function upsertPersona(
   `;
 }
 
+// ========== IMPORTACION DESDE PLANILLA ==========
+
+export type FilaImportacion = {
+  dni: string;
+  nombre: string;
+  apellido: string;
+  lote?: string;
+  patente?: string;
+  telefono?: string;
+  observaciones?: string;
+};
+
+export type ResultadoImportacion = {
+  success?: boolean;
+  error?: string;
+  creados: number;
+  actualizados: number;
+  omitidos: number;
+  detalleOmitidos: string[];
+};
+
+/**
+ * Alta masiva de personas desde una planilla.
+ *
+ * No pisa identidades ya cargadas salvo que se pida expresamente: la foto y
+ * el nombre vigentes de alguien que ya ingreso al barrio valen mas que lo que
+ * diga un Excel viejo.
+ */
+export async function importarPersonas(
+  filas: FilaImportacion[],
+  opciones: { actualizarExistentes?: boolean } = {}
+): Promise<ResultadoImportacion> {
+  const res: ResultadoImportacion = { creados: 0, actualizados: 0, omitidos: 0, detalleOmitidos: [] };
+  if (!filas?.length) return { ...res, error: "No hay filas para importar." };
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    for (const f of filas) {
+      const dni = String(f.dni || "").trim();
+      const nombre = String(f.nombre || "").trim();
+      const apellido = String(f.apellido || "").trim();
+
+      if (!dni || (!nombre && !apellido)) {
+        res.omitidos++;
+        res.detalleOmitidos.push(`${dni || "(sin DNI)"} — faltan datos`);
+        continue;
+      }
+
+      const existente = await getPersona(sql, dni);
+
+      if (existente && !opciones.actualizarExistentes) {
+        res.omitidos++;
+        res.detalleOmitidos.push(`${dni} — ya existe como ${existente.nombre} ${existente.apellido}`);
+        continue;
+      }
+
+      await upsertPersona(
+        sql,
+        { dni, nombre, apellido },
+        existente ? { sobrescribir: true, motivo: "Importación desde planilla" } : {}
+      );
+
+      if (existente) res.actualizados++;
+      else res.creados++;
+    }
+
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { ...res, success: true };
+  } catch (error: any) {
+    return { ...res, error: error.message || "Error al importar personas." };
+  }
+}
+
+/**
+ * Alta masiva de autorizados permanentes desde una planilla.
+ * Crea la identidad si el DNI todavia no existe, asi el archivo de autorizados
+ * se puede importar aunque esa persona no figure en la planilla de ingresos.
+ */
+export async function importarAutorizados(filas: FilaImportacion[]): Promise<ResultadoImportacion> {
+  const res: ResultadoImportacion = { creados: 0, actualizados: 0, omitidos: 0, detalleOmitidos: [] };
+  if (!filas?.length) return { ...res, error: "No hay filas para importar." };
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    for (const f of filas) {
+      const dni = String(f.dni || "").trim();
+      const nombre = String(f.nombre || "").trim();
+      const apellido = String(f.apellido || "").trim();
+      const lote = String(f.lote || "").trim();
+      const patente = String(f.patente || "").trim().toUpperCase();
+      const observaciones = String(f.observaciones || "").trim();
+
+      if (!dni || (!nombre && !apellido)) {
+        res.omitidos++;
+        res.detalleOmitidos.push(`${dni || "(sin DNI)"} — faltan datos`);
+        continue;
+      }
+      if (!lote) {
+        res.omitidos++;
+        res.detalleOmitidos.push(`${dni} — sin lote`);
+        continue;
+      }
+
+      const esResidente = (await sql`
+        SELECT 1 FROM residentes WHERE dni = ${dni} LIMIT 1
+      `) as any[];
+      if (esResidente.length > 0) {
+        res.omitidos++;
+        res.detalleOmitidos.push(`${dni} — es residente, ya tiene ingreso`);
+        continue;
+      }
+
+      // La identidad se crea si falta, pero no se pisa si ya existe.
+      await upsertPersona(sql, { dni, nombre, apellido });
+      const identidad = await getPersona(sql, dni);
+
+      const yaTenia = (await sql`
+        SELECT 1 FROM autorizados WHERE dni = ${dni} AND usada = FALSE LIMIT 1
+      `) as any[];
+
+      await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
+      await sql`
+        INSERT INTO autorizados
+          (nombre, apellido, dni, tipo, observaciones, patente, lote,
+           autorizado, un_solo_uso, usada, foto_url)
+        VALUES
+          (${identidad?.nombre || nombre}, ${identidad?.apellido || apellido}, ${dni},
+           'permanente', ${observaciones}, ${patente || null}, ${lote},
+           TRUE, FALSE, FALSE, ${identidad?.foto_url || null})
+      `;
+
+      if (yaTenia.length > 0) res.actualizados++;
+      else res.creados++;
+    }
+
+    revalidatePath("/maestros");
+    revalidatePath("/");
+    return { ...res, success: true };
+  } catch (error: any) {
+    return { ...res, error: error.message || "Error al importar autorizados." };
+  }
+}
+
+/** DNI que ya existen en `personas`, para avisar en la vista previa. */
+export async function dnisExistentes(dnis: string[]): Promise<string[]> {
+  const limpios = (dnis || []).map((d) => String(d).trim()).filter(Boolean);
+  if (limpios.length === 0) return [];
+  try {
+    await ensureTables();
+    const sql = getSql();
+    const filas = (await sql`
+      SELECT dni FROM personas WHERE dni = ANY(${limpios})
+    `) as any[];
+    return filas.map((f) => f.dni as string);
+  } catch {
+    return [];
+  }
+}
+
 // ========== OPERADORES (vigiladores) ==========
 
 export type Operador = {

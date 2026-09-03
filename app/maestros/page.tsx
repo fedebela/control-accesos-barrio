@@ -137,7 +137,10 @@ export default function MaestrosPage() {
     <div style={styles.container}>
       <header style={styles.header}>
         <h1 style={styles.title}>Maestros</h1>
-        <a href="/" style={styles.backLink}>← Volver</a>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+          <a href="/importar" style={styles.backLink}>Importar planilla</a>
+          <a href="/" style={styles.backLink}>← Volver</a>
+        </div>
       </header>
 
       <div style={styles.tabs}>
