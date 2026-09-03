@@ -345,22 +345,14 @@ function PantallaAccesos() {
       <div style={styles.card}>
         <h2 style={styles.cardTitle}>{mode === "entrada" ? "Registrar Entrada" : "Registrar Salida"}</h2>
 
-        {/* ---------------- Operador que registra ---------------- */}
-        <div style={styles.operadorBox}>
-          <label style={styles.label}>Registra *</label>
-          {operadores.length === 0 ? (
+        {operadores.length === 0 && (
+          <div style={styles.operadorBox}>
             <p style={styles.operadorFalta}>
               No hay operadores cargados. Andá a <a href="/maestros" style={styles.navLink}>Maestros → Operadores</a> y
               cargá al menos uno para poder registrar movimientos.
             </p>
-          ) : (
-            <select value={operadorId} onChange={(e) => setOperadorId(e.target.value)} style={styles.input}>
-              {operadores.map((o) => (
-                <option key={o.id} value={o.id}>{o.apellido}, {o.nombre}</option>
-              ))}
-            </select>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* ---------------- Busqueda ---------------- */}
         <div style={styles.inputGroup}>
@@ -554,6 +546,12 @@ function PantallaAccesos() {
               />
             )}
 
+            <SelectorOperador
+              operadores={operadores}
+              valor={operadorId}
+              onChange={setOperadorId}
+            />
+
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
 
@@ -638,6 +636,12 @@ function PantallaAccesos() {
                 onMedio={setAuthMedio}
               />
             )}
+
+            <SelectorOperador
+              operadores={operadores}
+              valor={operadorId}
+              onChange={setOperadorId}
+            />
 
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
@@ -757,6 +761,33 @@ function motivoBloqueo(
   if (lotes.length === 0) return "Agregá al menos un lote";
   if (necesitaAuth && !authOk) return "Falta la autorización del residente";
   return null;
+}
+
+/**
+ * Quien registra el movimiento. Va al final, pegado al boton: es el ultimo
+ * dato que el operador confirma antes de dar la entrada o la salida.
+ * Viene preseleccionado el ultimo que registro, asi que casi siempre se deja
+ * como esta y solo se cambia al relevar el turno.
+ */
+function SelectorOperador({
+  operadores, valor, onChange,
+}: {
+  operadores: Operador[];
+  valor: string;
+  onChange: (v: string) => void;
+}) {
+  if (operadores.length === 0) return null;
+
+  return (
+    <div style={styles.operadorBox}>
+      <label style={styles.label}>Registra *</label>
+      <select value={valor} onChange={(e) => onChange(e.target.value)} style={styles.input}>
+        {operadores.map((o) => (
+          <option key={o.id} value={o.id}>{o.apellido}, {o.nombre}</option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function BotonEnviar({

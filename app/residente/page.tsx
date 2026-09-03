@@ -110,53 +110,6 @@ export default function ResidentePage() {
       {msg?.error && <div style={styles.error}>{msg.error}</div>}
       {msg?.success && <div style={styles.exito}>{msg.message}</div>}
 
-      {/* ---------- Autorizadas hoy ---------- */}
-      <div style={styles.tarjeta}>
-        <h2 style={styles.tarjetaTitulo}>
-          Con acceso habilitado {autorizadas.length > 0 && <span style={styles.contador}>{autorizadas.length}</span>}
-        </h2>
-
-        {autorizadas.length === 0 ? (
-          <p style={styles.vacio}>
-            Todavía no autorizaste a nadie. Elegí de la lista de abajo a quien quieras
-            habilitar para que entre sin llamarte.
-          </p>
-        ) : (
-          autorizadas.map((p) => (
-            <div key={p.dni} style={styles.itemAutorizado}>
-              <div style={styles.persona}>
-                {p.foto_url
-                  ? <img src={p.foto_url} alt="" style={styles.foto} />
-                  : <div style={styles.fotoVacia}>—</div>}
-                <div>
-                  <strong>{p.apellido}, {p.nombre}</strong>
-                  <span style={p.tipoAutorizacion === "permanente" ? styles.chipPermanente : styles.chipTemporal}>
-                    {p.tipoAutorizacion === "permanente" ? "Permanente" : "Una sola vez"}
-                  </span>
-                  <div style={styles.meta}>
-                    DNI {p.dni}
-                    {p.subtipo ? ` · ${etiquetaRubro(p.subtipo)}` : ""}
-                    {p.patente ? ` · ${p.patente}` : ""}
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!confirm(`¿Quitar la autorización de ${p.nombre} ${p.apellido}?`)) return;
-                  const r = await revocarDesdeResidente(p.dni);
-                  setMsg(r);
-                  cargar();
-                }}
-                style={styles.btnQuitar}
-              >
-                Quitar
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-
       {/* ---------- Buscador ---------- */}
       <div style={styles.tarjeta}>
         <h2 style={styles.tarjetaTitulo}>Autorizar a alguien</h2>
@@ -229,6 +182,53 @@ export default function ResidentePage() {
               );
             })}
           </div>
+        )}
+      </div>
+
+      {/* ---------- Autorizadas hoy ---------- */}
+      <div style={styles.tarjeta}>
+        <h2 style={styles.tarjetaTitulo}>
+          Con acceso habilitado {autorizadas.length > 0 && <span style={styles.contador}>{autorizadas.length}</span>}
+        </h2>
+
+        {autorizadas.length === 0 ? (
+          <p style={styles.vacio}>
+            Todavía no autorizaste a nadie. Buscá arriba a quien quieras habilitar
+            para que entre sin necesidad de llamarte.
+          </p>
+        ) : (
+          autorizadas.map((p) => (
+            <div key={p.dni} style={styles.itemAutorizado}>
+              <div style={styles.persona}>
+                {p.foto_url
+                  ? <img src={p.foto_url} alt="" style={styles.foto} />
+                  : <div style={styles.fotoVacia}>—</div>}
+                <div>
+                  <strong>{p.apellido}, {p.nombre}</strong>
+                  <span style={p.tipoAutorizacion === "permanente" ? styles.chipPermanente : styles.chipTemporal}>
+                    {p.tipoAutorizacion === "permanente" ? "Permanente" : "Una sola vez"}
+                  </span>
+                  <div style={styles.meta}>
+                    DNI {p.dni}
+                    {p.subtipo ? ` · ${etiquetaRubro(p.subtipo)}` : ""}
+                    {p.patente ? ` · ${p.patente}` : ""}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm(`¿Quitar la autorización de ${p.nombre} ${p.apellido}?`)) return;
+                  const r = await revocarDesdeResidente(p.dni);
+                  setMsg(r);
+                  cargar();
+                }}
+                style={styles.btnQuitar}
+              >
+                Quitar
+              </button>
+            </div>
+          ))
         )}
       </div>
 
