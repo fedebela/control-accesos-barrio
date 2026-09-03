@@ -1459,6 +1459,55 @@ export async function getRegistrosFiltrados(f: FiltrosInforme): Promise<Registro
   }
 }
 
+/**
+ * Entradas de proveedores que todavia no registraron la salida.
+ *
+ * Se muestra en la pantalla del operador: da una idea de quien esta adentro y
+ * deja ver errores de carga. No pasa por la clave de gestion porque es
+ * informacion operativa del puesto, no administrativa.
+ *
+ * Se acota a los ultimos dias para que una entrada vieja sin cerrar no quede
+ * para siempre ocupando la pantalla; el listado completo esta en Informes.
+ */
+export async function getProveedoresSinSalida(dias = 15): Promise<RegistroInforme[]> {
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    return (await sql`
+      SELECT r.*,
+             p.foto_url,
+             COALESCE(
+               (SELECT string_agg(rl.lote, ', ' ORDER BY rl.id)
+                FROM registro_lotes rl WHERE rl.registro_id = r.id),
+               r.lote_destino
+             ) AS lotes
+      FROM registros r
+      LEFT JOIN personas p ON p.dni = r.dni
+      WHERE r.tipo = 'proveedor'
+        AND r.es_entrada = TRUE
+        AND r.fecha_hora > NOW() - (${dias} || ' days')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM registros s
+          WHERE s.dni = r.dni
+            AND s.es_entrada = FALSE
+            AND s.fecha_hora > r.fecha_hora
+            AND s.fecha_hora < COALESCE((
+              SELECT MIN(e.fecha_hora) FROM registros e
+              WHERE e.dni = r.dni
+                AND e.es_entrada = TRUE
+                AND e.fecha_hora > r.fecha_hora
+            ), 'infinity'::timestamptz)
+        )
+      ORDER BY r.fecha_hora DESC
+      LIMIT 100
+    `) as unknown as RegistroInforme[];
+  } catch (error) {
+    console.error("Error al obtener proveedores sin salida:", error);
+    return [];
+  }
+}
+
 /** Lotes que aparecen en la bitacora, para el desplegable de filtros. */
 export async function getLotesUsados(): Promise<string[]> {
   try {

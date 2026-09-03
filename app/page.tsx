@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import BarraSesion from "@/app/components/BarraSesion";
 import {
   searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores, getUltimoOperadorUsado,
-  getApellidosPorLote,
+  getApellidosPorLote, getProveedoresSinSalida,
   type ResultadoBusqueda, type EstadoAutorizacion, type Operador,
 } from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
@@ -648,6 +648,94 @@ function PantallaAccesos() {
       </div>
 
       <RecentRecords refreshKey={refreshKey} />
+      <ProveedoresAdentro refreshKey={refreshKey} />
+    </div>
+  );
+}
+
+/** "3 h 20 min" desde el ingreso. */
+function transcurrido(desde: string): string {
+  const min = Math.floor((Date.now() - new Date(desde).getTime()) / 60000);
+  if (min < 1) return "recién";
+  if (min < 60) return `${min} min`;
+
+  const horas = Math.floor(min / 60);
+  const resto = min % 60;
+  if (horas < 24) return resto ? `${horas} h ${resto} min` : `${horas} h`;
+
+  const dias = Math.floor(horas / 24);
+  return dias === 1 ? "1 día" : `${dias} días`;
+}
+
+/**
+ * Proveedores que entraron y no registraron la salida.
+ * Sirve para saber quien esta adentro y para detectar cargas mal hechas.
+ * Las visitas no se controlan: pueden irse con el propietario o en otro auto.
+ */
+function ProveedoresAdentro({ refreshKey }: { refreshKey: number }) {
+  const [lista, setLista] = useState<any[]>([]);
+  const [cargado, setCargado] = useState(false);
+
+  useEffect(() => {
+    let activo = true;
+    getProveedoresSinSalida().then((r) => {
+      if (!activo) return;
+      setLista(r);
+      setCargado(true);
+    });
+    return () => { activo = false; };
+  }, [refreshKey]);
+
+  if (!cargado) return null;
+
+  const horasDe = (f: string) => (Date.now() - new Date(f).getTime()) / 3600000;
+  const demorados = lista.filter((r) => horasDe(r.fecha_hora) >= 12).length;
+
+  return (
+    <div style={lista.length > 0 ? styles.cardAviso : styles.card}>
+      <div style={styles.tituloFila}>
+        <h2 style={styles.cardTitle}>Proveedores sin salida registrada</h2>
+        {lista.length > 0 && <span style={styles.contador}>{lista.length}</span>}
+      </div>
+
+      {lista.length === 0 ? (
+        <p style={styles.empty}>
+          Todos los proveedores registraron su salida.
+        </p>
+      ) : (
+        <>
+          <p style={styles.avisoTexto}>
+            Están dentro del barrio según el registro.
+            {demorados > 0 && (
+              <> <strong>{demorados}</strong> {demorados === 1 ? "lleva" : "llevan"} más de 12 horas:
+              conviene verificar si la salida no se cargó.</>
+            )}
+          </p>
+
+          <div style={styles.recordsList}>
+            {lista.map((r) => {
+              const viejo = horasDe(r.fecha_hora) >= 12;
+              return (
+                <div key={r.id} style={viejo ? styles.filaVieja : styles.recordRow}>
+                  <div style={styles.recordMain}>
+                    {r.foto_url && <img src={r.foto_url} alt="" style={{ width: 28, height: 28, borderRadius: "0.3rem", objectFit: "cover" }} />}
+                    <span style={styles.recordName}>{r.apellido}, {r.nombre}</span>
+                    <span style={styles.recordDni}>DNI {r.dni}</span>
+                    {r.subtipo && <span style={styles.recordRubro}>{etiquetaRubro(r.subtipo)}</span>}
+                    {r.patente && <span style={styles.recordDni}>· {r.patente}</span>}
+                  </div>
+                  <div style={styles.recordMeta}>
+                    <span>Lote {r.lotes || r.lote_destino || "—"}</span>
+                    <span style={viejo ? styles.haceViejo : undefined}>
+                      hace {transcurrido(r.fecha_hora)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1050,7 +1138,13 @@ const styles: Record<string, React.CSSProperties> = {
   modeInactive: { flex: 1, padding: "0.9rem", border: "1px solid #d1d5db", borderRadius: "0.75rem", background: "#f8fafc", color: "#475569", fontWeight: 700, fontSize: "1rem", cursor: "pointer" },
 
   card: { background: "#fff", borderRadius: "1rem", padding: "1.5rem", marginBottom: "1.25rem", border: "1px solid #e2e8f0", boxShadow: "0 8px 24px rgba(0,0,0,0.05)" },
+  cardAviso: { background: "#fffbeb", borderRadius: "1rem", padding: "1.5rem", marginBottom: "1.25rem", border: "1px solid #fcd34d", boxShadow: "0 8px 24px rgba(0,0,0,0.05)" },
   cardTitle: { fontSize: "1.25rem", fontWeight: 800, margin: "0 0 1rem", color: "#0f172a" },
+  tituloFila: { display: "flex", alignItems: "center", gap: "0.6rem" },
+  contador: { background: "#f59e0b", color: "#fff", fontWeight: 800, fontSize: "0.85rem", borderRadius: "999px", minWidth: 26, height: 26, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 0.5rem", marginBottom: "1rem" },
+  avisoTexto: { fontSize: "0.9rem", color: "#92400e", margin: "0 0 0.85rem", lineHeight: 1.55 },
+  filaVieja: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", padding: "0.6rem 0.75rem", borderRadius: "0.5rem", background: "#fff", border: "1px solid #fca5a5", flexWrap: "wrap" },
+  haceViejo: { color: "#b91c1c", fontWeight: 700 },
 
   operadorBox: { background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: "0.75rem", padding: "0.75rem 0.9rem", marginBottom: "1rem" },
   operadorFalta: { fontSize: "0.88rem", color: "#92400e", margin: 0, lineHeight: 1.5 },
