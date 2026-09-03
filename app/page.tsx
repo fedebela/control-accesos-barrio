@@ -3,6 +3,7 @@
 import { useActionState, useState, useRef, useEffect, useCallback } from "react";
 import {
   searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores, getUltimoOperadorUsado,
+  getApellidosPorLote,
   type ResultadoBusqueda, type EstadoAutorizacion, type Operador,
 } from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
@@ -139,6 +140,10 @@ export default function HomePage() {
   const [operadores, setOperadores] = useState<Operador[]>([]);
   const [operadorId, setOperadorId] = useState("");
 
+  // Apellidos de los residentes de cada lote cargado, para que el operador
+  // confirme que el lote es el correcto.
+  const [apellidosLote, setApellidosLote] = useState<Record<string, string>>({});
+
   const inputRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
@@ -170,10 +175,19 @@ export default function HomePage() {
     setAuthMedio("");
     setForm({ ...FORM_VACIO });
     setLotes([]);
+    setApellidosLote({});
     if (scanRef.current) { scanRef.current.value = ""; scanRef.current.focus(); }
   }, []);
 
   useEffect(() => { if (scanRef.current) scanRef.current.focus(); }, [mode]);
+
+  // Cada vez que cambia la lista de lotes se buscan los apellidos de sus residentes.
+  useEffect(() => {
+    if (lotes.length === 0) { setApellidosLote({}); return; }
+    let activo = true;
+    getApellidosPorLote(lotes).then((r) => { if (activo) setApellidosLote(r); });
+    return () => { activo = false; };
+  }, [lotes.join("|")]);
 
   useEffect(() => {
     if (estado?.success) {
@@ -278,12 +292,23 @@ export default function HomePage() {
     faltaRubro ||
     !operadorId;
 
+  // Apellidos de todos los lotes del movimiento, para dejarlos asentados.
+  const apellidosDelMovimiento = Array.from(
+    new Set(
+      lotes
+        .map((l) => apellidosLote[l])
+        .filter(Boolean)
+        .flatMap((a) => a.split(" / "))
+    )
+  ).join(" / ");
+
   // Campos comunes a los dos formularios.
   const camposComunes = (
     <>
       {lotes.map((l) => (
         <input key={l} type="hidden" name="lote_destino" value={l} />
       ))}
+      <input type="hidden" name="residente_nombre" value={apellidosDelMovimiento} />
       <input type="hidden" name="operador_id" value={operadorId} />
       <input type="hidden" name="operador_nombre" value={operadorSel ? `${operadorSel.nombre} ${operadorSel.apellido}` : ""} />
     </>
@@ -397,7 +422,6 @@ export default function HomePage() {
             <input type="hidden" name="nombre" value={form.nombre} />
             <input type="hidden" name="apellido" value={form.apellido} />
             <input type="hidden" name="dni" value={form.dni} />
-            <input type="hidden" name="residente_nombre" value={form.residenteNombre} />
             <input type="hidden" name="foto_url" value={form.fotoUrl} />
             {camposComunes}
 
@@ -465,6 +489,7 @@ export default function HomePage() {
             <LotesEditor
               lotes={lotes}
               setLotes={setLotes}
+              apellidos={apellidosLote}
               label={labelLote}
               esProveedor={form.tipo === "proveedor"}
               modo={mode}
@@ -534,6 +559,7 @@ export default function HomePage() {
             <LotesEditor
               lotes={lotes}
               setLotes={setLotes}
+              apellidos={apellidosLote}
               label={labelLote}
               esProveedor={form.tipo === "proveedor"}
               modo={mode}
@@ -655,10 +681,11 @@ function TipoYRubro({
  * en el mismo ingreso; una visita trae uno solo.
  */
 function LotesEditor({
-  lotes, setLotes, label, esProveedor, modo,
+  lotes, setLotes, apellidos, label, esProveedor, modo,
 }: {
   lotes: string[];
   setLotes: (l: string[]) => void;
+  apellidos: Record<string, string>;
   label: string;
   esProveedor: boolean;
   modo: "entrada" | "salida";
@@ -673,19 +700,34 @@ function LotesEditor({
     setNuevo("");
   }
 
+  const sinResidentes = lotes.filter((l) => apellidos[l] === "");
+
   return (
     <div style={styles.lotesBox}>
       <label style={styles.label}>{label} *</label>
 
       {lotes.length > 0 && (
         <div style={styles.lotesChips}>
-          {lotes.map((l) => (
-            <span key={l} style={styles.chip}>
-              {l}
-              <button type="button" onClick={() => setLotes(lotes.filter((x) => x !== l))} style={styles.chipX} title="Quitar">×</button>
-            </span>
-          ))}
+          {lotes.map((l) => {
+            const ape = apellidos[l];
+            return (
+              <span key={l} style={ape === "" ? styles.chipSinDueno : styles.chip}>
+                <span style={styles.chipLote}>{l}</span>
+                {ape ? <span style={styles.chipApellidos}>{ape}</span> : null}
+                {ape === "" ? <span style={styles.chipApellidos}>sin residente</span> : null}
+                <button type="button" onClick={() => setLotes(lotes.filter((x) => x !== l))} style={styles.chipX} title="Quitar">×</button>
+              </span>
+            );
+          })}
         </div>
+      )}
+
+      {sinResidentes.length > 0 && (
+        <p style={styles.lotesAviso}>
+          {sinResidentes.length === 1
+            ? `El lote ${sinResidentes[0]} no tiene residentes cargados. Verificá el número.`
+            : `Los lotes ${sinResidentes.join(", ")} no tienen residentes cargados. Verificá los números.`}
+        </p>
       )}
 
       <div style={styles.searchRow}>
@@ -999,8 +1041,12 @@ const styles: Record<string, React.CSSProperties> = {
 
   lotesBox: { background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.75rem", padding: "0.85rem" },
   lotesChips: { display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" },
-  chip: { display: "inline-flex", alignItems: "center", gap: "0.35rem", background: "#0f172a", color: "#fff", borderRadius: "999px", padding: "0.25rem 0.4rem 0.25rem 0.7rem", fontSize: "0.85rem", fontWeight: 700 },
+  chip: { display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "#0f172a", color: "#fff", borderRadius: "999px", padding: "0.25rem 0.4rem 0.25rem 0.7rem", fontSize: "0.85rem", fontWeight: 700 },
+  chipSinDueno: { display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "#92400e", color: "#fff", borderRadius: "999px", padding: "0.25rem 0.4rem 0.25rem 0.7rem", fontSize: "0.85rem", fontWeight: 700 },
+  chipLote: { fontWeight: 800 },
+  chipApellidos: { fontWeight: 500, opacity: 0.85, fontSize: "0.8rem" },
   chipX: { border: "none", background: "rgba(255,255,255,0.25)", color: "#fff", borderRadius: "999px", width: 18, height: 18, lineHeight: "16px", cursor: "pointer", fontSize: "0.9rem", padding: 0 },
+  lotesAviso: { fontSize: "0.82rem", color: "#92400e", fontWeight: 600, margin: "0 0 0.6rem" },
   lotesNota: { fontSize: "0.8rem", color: "#64748b", margin: "0.5rem 0 0", lineHeight: 1.45 },
   lotesFalta: { fontSize: "0.82rem", color: "#b91c1c", fontWeight: 600, margin: "0.5rem 0 0" },
 

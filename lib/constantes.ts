@@ -22,10 +22,8 @@ export const RUBROS_PROVEEDOR = [
 ] as const;
 
 export const TURNOS = [
-  { valor: "manana", etiqueta: "Mañana" },
-  { valor: "tarde", etiqueta: "Tarde" },
+  { valor: "dia", etiqueta: "Día" },
   { valor: "noche", etiqueta: "Noche" },
-  { valor: "rotativo", etiqueta: "Rotativo" },
 ] as const;
 
 export const MEDIOS_AUTORIZACION = [

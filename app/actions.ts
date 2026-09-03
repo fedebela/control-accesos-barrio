@@ -994,6 +994,45 @@ async function tieneAutorizacionVigente(sql: ReturnType<typeof getSql>, dni: str
   }).autorizado;
 }
 
+/**
+ * Apellidos de los residentes de cada lote, separados por " / ".
+ *
+ * Sirve para que el operador confirme que cargo el lote correcto: al escribir
+ * el numero ve de quien es. Un lote puede tener varios residentes (propietario
+ * e inquilino, familias distintas), por eso se agregan todos.
+ *
+ * Se consultan todos los lotes de una sola vez para no hacer una llamada por lote.
+ */
+export async function getApellidosPorLote(lotes: string[]): Promise<Record<string, string>> {
+  const limpios = Array.from(
+    new Set((lotes || []).map((l) => String(l).trim()).filter(Boolean))
+  );
+  if (limpios.length === 0) return {};
+
+  try {
+    await ensureTables();
+    const sql = getSql();
+
+    const filas = (await sql`
+      SELECT lower(lote) AS clave,
+             string_agg(DISTINCT apellido, ' / ' ORDER BY apellido) AS apellidos
+      FROM residentes
+      WHERE lower(lote) = ANY(${limpios.map((l) => l.toLowerCase())})
+      GROUP BY lower(lote)
+    `) as any[];
+
+    const porClave = new Map(filas.map((f) => [f.clave as string, f.apellidos as string]));
+
+    // Se devuelve con el lote tal como lo escribio el operador.
+    const salida: Record<string, string> = {};
+    for (const l of limpios) salida[l] = porClave.get(l.toLowerCase()) || "";
+    return salida;
+  } catch (error) {
+    console.error("Error al obtener apellidos por lote:", error);
+    return {};
+  }
+}
+
 /** Residentes de un lote, para poder pedirles autorizacion por telefono o WhatsApp. */
 export async function getResidentesDeLote(lote: string) {
   const limpio = String(lote || "").trim();
