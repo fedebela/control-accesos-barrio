@@ -3,6 +3,7 @@
 import { useState, useMemo, useRef } from "react";
 import { importarPersonas, importarAutorizados, dnisExistentes, type ResultadoImportacion } from "@/app/actions";
 import { parsearCsv, sugerirMapeo, separarNombre, limpiarDni, aTitulo } from "@/lib/csv";
+import BarraSesion from "@/app/components/BarraSesion";
 
 type Destino = "personas" | "autorizados";
 
@@ -129,6 +130,8 @@ export default function ImportarPage() {
 
   return (
     <div style={styles.container}>
+      <BarraSesion />
+
       <header style={styles.header}>
         <h1 style={styles.title}>Importar desde planilla</h1>
         <a href="/maestros" style={styles.backLink}>← Volver a Maestros</a>

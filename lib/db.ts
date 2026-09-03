@@ -143,6 +143,52 @@ async function createTables() {
     );
   `;
 
+  // ---------- USUARIOS ----------
+  // Usuarios del puesto de guardia. Son pocos y compartidos por turno: varios
+  // operadores usan el mismo usuario, por eso quien firma el movimiento se
+  // sigue eligiendo del desplegable de operadores.
+  await sql`
+    CREATE TABLE IF NOT EXISTS usuarios (
+      id BIGSERIAL PRIMARY KEY,
+      usuario VARCHAR(50) NOT NULL UNIQUE,
+      descripcion VARCHAR(100),
+      clave_hash TEXT NOT NULL,
+      activo BOOLEAN DEFAULT TRUE,
+      ultimo_acceso TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  // ---------- SESIONES ----------
+  // Solo puede haber UNA sesion activa en toda la aplicacion: para que entre
+  // otro usuario, el anterior tiene que cerrar sesion. La tabla es la autoridad;
+  // la cookie firmada solo evita consultar la base en cada navegacion.
+  //
+  // `gestion_hasta` marca hasta cuando esta desbloqueado el acceso a maestros,
+  // informes e importacion dentro de la sesion.
+  await sql`
+    CREATE TABLE IF NOT EXISTS sesiones (
+      id VARCHAR(64) PRIMARY KEY,
+      usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      usuario VARCHAR(50) NOT NULL,
+      creada_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      ultimo_uso TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      expira_en TIMESTAMP WITH TIME ZONE NOT NULL,
+      gestion_habilitada BOOLEAN DEFAULT FALSE
+    );
+  `;
+
+  // ---------- CONFIGURACION ----------
+  // Pares clave/valor. Por ahora guarda la clave de gestion, que es unica y
+  // compartida: la usa el supervisor dentro de la sesion del guardia.
+  await sql`
+    CREATE TABLE IF NOT EXISTS configuracion (
+      clave VARCHAR(50) PRIMARY KEY,
+      valor TEXT NOT NULL,
+      actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
   // ---------- MIGRACIONES ----------
   // Se ejecutan DESPUES de crear las tablas, si no fallan en una base vacia.
   await sql`ALTER TABLE residentes  ADD COLUMN IF NOT EXISTS rol VARCHAR(20) DEFAULT 'propietario'`;
@@ -166,6 +212,7 @@ async function createTables() {
   await sql`ALTER TABLE registros   ADD COLUMN IF NOT EXISTS operador_nombre VARCHAR(200)`;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_residentes_lote ON residentes (lote)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_sesiones_expira ON sesiones (expira_en)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_reg ON registro_lotes (registro_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registro_lotes_lote ON registro_lotes (lote)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_registros_tipo ON registros (tipo)`;

@@ -1,6 +1,8 @@
 "use client";
 
-import { useActionState, useState, useRef, useEffect, useCallback } from "react";
+import { useActionState, useState, useRef, useEffect, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import BarraSesion from "@/app/components/BarraSesion";
 import {
   searchPersona, registrarMovimiento, getResidentesDeLote, getOperadores, getUltimoOperadorUsado,
   getApellidosPorLote,
@@ -121,6 +123,15 @@ const FORM_VACIO = {
 };
 
 export default function HomePage() {
+  return (
+    <Suspense fallback={null}>
+      <PantallaAccesos />
+    </Suspense>
+  );
+}
+
+function PantallaAccesos() {
+  const params = useSearchParams();
   const [mode, setMode] = useState<"entrada" | "salida">("entrada");
   const [dniInput, setDniInput] = useState("");
   const [resultado, setResultado] = useState<ResultadoBusqueda | null>(null);
@@ -316,12 +327,14 @@ export default function HomePage() {
 
   return (
     <div style={styles.container}>
+      <BarraSesion
+        abrirGestion={params.get("gestion") === "1"}
+        destino={params.get("destino") || ""}
+      />
+
       <header style={styles.header}>
-        <h1 style={styles.title}>Control de Accesos</h1>
-        <nav style={styles.nav}>
-          <a href="/maestros" style={styles.navLink}>Maestros</a>
-          <a href="/informes" style={styles.navLink}>Informes</a>
-        </nav>
+        <h1 style={styles.title}>Registro de Accesos</h1>
+        <span style={styles.barrio}>Altos de la Horqueta</span>
       </header>
 
       <div style={styles.modeToggle}>
@@ -1027,6 +1040,7 @@ const styles: Record<string, React.CSSProperties> = {
   container: { maxWidth: 900, margin: "0 auto", padding: "1.5rem 1rem" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" },
   title: { fontSize: "1.75rem", fontWeight: 800, color: "#0f172a", margin: 0 },
+  barrio: { fontSize: "0.95rem", color: "#64748b", fontWeight: 600 },
   nav: { display: "flex", gap: "1rem" },
   navLink: { color: "#2563eb", textDecoration: "none", fontWeight: 600 },
 

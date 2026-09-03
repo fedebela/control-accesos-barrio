@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { ensureTables, getSql } from "@/lib/db";
+import { exigirGestion } from "@/app/actions-auth";
 
 // ========== TYPES ==========
 
@@ -394,6 +395,7 @@ export async function getUltimoOperadorUsado(): Promise<number | null> {
 }
 
 export async function createOperador(prevState: any, formData: FormData) {
+  { const b = await exigirGestion(); if (b) return { error: b }; }
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
@@ -426,6 +428,7 @@ export async function createOperador(prevState: any, formData: FormData) {
 }
 
 export async function updateOperador(id: number, prevState: any, formData: FormData) {
+  { const b = await exigirGestion(); if (b) return { error: b }; }
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
@@ -556,6 +559,7 @@ export async function getResidentes(): Promise<Residente[]> {
 }
 
 export async function createResidente(prevState: any, formData: FormData) {
+  { const b = await exigirGestion(); if (b) return { error: b }; }
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const lote = String(formData.get("lote") || "").trim();
@@ -597,6 +601,7 @@ export async function createResidente(prevState: any, formData: FormData) {
 }
 
 export async function updateResidente(id: number, prevState: any, formData: FormData) {
+  { const b = await exigirGestion(); if (b) return { error: b }; }
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const lote = String(formData.get("lote") || "").trim();
@@ -675,6 +680,7 @@ export async function getAutorizados(): Promise<Autorizado[]> {
  * Reemplaza cualquier autorizacion anterior de los mismos DNI.
  */
 export async function autorizarPersonas(prevState: any, formData: FormData) {
+  { const b = await exigirGestion(); if (b) return { error: b }; }
   const dnis = formData
     .getAll("dni")
     .map((d) => String(d).trim())

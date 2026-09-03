@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { getRegistrosFiltrados, getLotesUsados, getOperadores, type FiltrosInforme } from "@/app/actions";
 import { TIPOS, RUBROS_PROVEEDOR, etiquetaRubro, etiquetaTipo, etiquetaMedio } from "@/lib/constantes";
+import BarraSesion from "@/app/components/BarraSesion";
 
 // ---------------------------------------------------------------- Columnas
 
@@ -127,6 +128,8 @@ export default function InformesPage() {
   return (
     <div style={styles.container}>
       <style>{ESTILOS_IMPRESION}</style>
+
+      <div className="no-print"><BarraSesion /></div>
 
       <header style={styles.header} className="no-print">
         <h1 style={styles.title}>Informes</h1>

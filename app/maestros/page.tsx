@@ -8,6 +8,10 @@ import {
   getOperadores, createOperador, updateOperador, deleteOperador,
   type ResultadoBusqueda, type EstadoAutorizacion,
 } from "@/app/actions";
+import {
+  getUsuarios, crearUsuario, cambiarClaveUsuario, activarUsuario, cambiarClaveGestion,
+} from "@/app/actions-auth";
+import BarraSesion from "@/app/components/BarraSesion";
 import { TURNOS, etiquetaTurno } from "@/lib/constantes";
 
 // ---------------------------------------------------------------- PhotoInput
@@ -119,22 +123,28 @@ function estadoDeFila(a: any): EstadoAutorizacion {
 // ---------------------------------------------------------------- Página
 
 export default function MaestrosPage() {
-  const [tab, setTab] = useState<"autorizados" | "residentes" | "operadores">("autorizados");
+  const [tab, setTab] = useState<"autorizados" | "residentes" | "operadores" | "usuarios">("autorizados");
   const [residentes, setResidentes] = useState<any[]>([]);
   const [autorizados, setAutorizados] = useState<any[]>([]);
   const [operadores, setOperadores] = useState<any[]>([]);
+  const [usuarios, setUsuarios] = useState<any[]>([]);
 
   const loadData = async () => {
-    const [r, a, o] = await Promise.all([getResidentes(), getAutorizados(), getOperadores()]);
+    const [r, a, o, u] = await Promise.all([
+      getResidentes(), getAutorizados(), getOperadores(), getUsuarios(),
+    ]);
     setResidentes(r);
     setAutorizados(a);
     setOperadores(o);
+    setUsuarios(u);
   };
 
   useEffect(() => { loadData(); }, []);
 
   return (
     <div style={styles.container}>
+      <BarraSesion />
+
       <header style={styles.header}>
         <h1 style={styles.title}>Maestros</h1>
         <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
@@ -147,11 +157,138 @@ export default function MaestrosPage() {
         <button onClick={() => setTab("autorizados")} style={tab === "autorizados" ? styles.tabActive : styles.tabInactive}>Autorizados</button>
         <button onClick={() => setTab("residentes")} style={tab === "residentes" ? styles.tabActive : styles.tabInactive}>Residentes</button>
         <button onClick={() => setTab("operadores")} style={tab === "operadores" ? styles.tabActive : styles.tabInactive}>Operadores</button>
+        <button onClick={() => setTab("usuarios")} style={tab === "usuarios" ? styles.tabActive : styles.tabInactive}>Usuarios y claves</button>
       </div>
 
       {tab === "autorizados" && <TabAutorizados autorizados={autorizados} reload={loadData} />}
       {tab === "residentes" && <TabResidentes residentes={residentes} reload={loadData} />}
       {tab === "operadores" && <TabOperadores operadores={operadores} reload={loadData} />}
+      {tab === "usuarios" && <TabUsuarios usuarios={usuarios} reload={loadData} />}
+    </div>
+  );
+}
+
+// ============================ USUARIOS Y CLAVES ============================
+
+function TabUsuarios({ usuarios, reload }: { usuarios: any[]; reload: () => Promise<void> }) {
+  const [crearState, crearAction, crearPending] = useActionState(crearUsuario, null);
+  const [claveState, claveAction, clavePending] = useActionState(cambiarClaveUsuario, null);
+  const [gestionState, gestionAction, gestionPending] = useActionState(cambiarClaveGestion, null);
+  const [cambiando, setCambiando] = useState<any>(null);
+  const [msg, setMsg] = useState<any>(null);
+
+  useEffect(() => { if (crearState?.success) reload(); }, [crearState]);
+  useEffect(() => { if (claveState?.success) { reload(); setCambiando(null); } }, [claveState]);
+
+  return (
+    <div style={styles.card}>
+      <h2 style={styles.cardTitle}>Usuarios del puesto</h2>
+      <p style={styles.helper}>
+        Con estos usuarios se entra a la aplicación. Solo puede haber
+        <strong> una sesión abierta a la vez</strong>: para que entre otro turno, el
+        anterior tiene que cerrar sesión. La contraseña es de {8} caracteres,
+        letras y números.
+      </p>
+
+      {(msg || crearState)?.error && <div style={styles.error}>{(msg || crearState).error}</div>}
+      {(msg || crearState)?.success && <div style={styles.success}>{(msg || crearState).message}</div>}
+      {claveState?.error && <div style={styles.error}>{claveState.error}</div>}
+      {claveState?.success && <div style={styles.success}>{claveState.message}</div>}
+
+      {usuarios.map((u) => (
+        <div key={u.id} style={{ ...styles.listItem, opacity: u.activo ? 1 : 0.55 }}>
+          <div style={styles.listMain}>
+            <div>
+              <strong>{u.usuario}</strong>
+              {!u.activo && <span style={{ ...styles.badge, background: "#fee2e2", color: "#991b1b" }}>INACTIVO</span>}
+              <div style={styles.listMeta}>
+                {u.descripcion || "—"}
+                {u.ultimo_acceso ? ` · Último acceso ${new Date(u.ultimo_acceso).toLocaleString("es-AR")}` : " · Nunca ingresó"}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+            <button onClick={() => { setCambiando(u); setMsg(null); }} style={styles.editBtn}>Cambiar contraseña</button>
+            <button
+              onClick={async () => {
+                const r = await activarUsuario(u.id, !u.activo);
+                setMsg(r);
+                reload();
+              }}
+              style={u.activo ? styles.deleteBtn : styles.addBtn}
+            >
+              {u.activo ? "Desactivar" : "Activar"}
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {cambiando && (
+        <form action={claveAction} style={styles.formEmbebido}>
+          <input type="hidden" name="id" value={cambiando.id} />
+          <h3 style={styles.listTitle}>Nueva contraseña para «{cambiando.usuario}»</h3>
+          <div style={styles.formRow}>
+            <div style={styles.field}>
+              <input name="clave" type="password" required minLength={8} maxLength={8} placeholder="8 caracteres" style={styles.input} />
+            </div>
+            <button type="submit" disabled={clavePending} style={styles.submitBtn}>
+              {clavePending ? "Guardando…" : "Guardar"}
+            </button>
+            <button type="button" onClick={() => setCambiando(null)} style={styles.cancelBtn}>Cancelar</button>
+          </div>
+        </form>
+      )}
+
+      <h3 style={styles.listTitle}>Nuevo usuario</h3>
+      <form action={crearAction} style={styles.form}>
+        <div style={styles.formRow}>
+          <div style={styles.field}>
+            <label style={styles.label}>Usuario *</label>
+            <input name="usuario" required placeholder="sin espacios ni acentos" style={styles.input} />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Descripción</label>
+            <input name="descripcion" placeholder="Puesto de guardia — Turno…" style={styles.input} />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Contraseña *</label>
+            <input name="clave" type="password" required minLength={8} maxLength={8} placeholder="8 caracteres" style={styles.input} />
+          </div>
+        </div>
+        <button type="submit" disabled={crearPending} style={styles.submitBtn}>
+          {crearPending ? "Creando…" : "Crear usuario"}
+        </button>
+      </form>
+
+      <h2 style={{ ...styles.cardTitle, marginTop: "2rem" }}>Clave de gestión</h2>
+      <p style={styles.helper}>
+        Es única y compartida. Se usa dentro de la sesión del puesto para entrar a
+        maestros, informes e importación, y también para forzar el cierre de una sesión
+        que quedó abierta. Son 4 caracteres.
+      </p>
+
+      {gestionState?.error && <div style={styles.error}>{gestionState.error}</div>}
+      {gestionState?.success && <div style={styles.success}>{gestionState.message}</div>}
+
+      <form action={gestionAction} style={styles.form}>
+        <div style={styles.formRow}>
+          <div style={styles.field}>
+            <label style={styles.label}>Clave actual *</label>
+            <input name="clave_actual" type="password" required maxLength={4} style={styles.input} />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Clave nueva *</label>
+            <input name="clave_nueva" type="password" required minLength={4} maxLength={4} style={styles.input} />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Repetir nueva *</label>
+            <input name="clave_repetir" type="password" required minLength={4} maxLength={4} style={styles.input} />
+          </div>
+        </div>
+        <button type="submit" disabled={gestionPending} style={styles.submitBtn}>
+          {gestionPending ? "Guardando…" : "Cambiar clave de gestión"}
+        </button>
+      </form>
     </div>
   );
 }
@@ -598,6 +735,7 @@ const styles: Record<string, React.CSSProperties> = {
   helper: { fontSize: "0.9rem", color: "#64748b", marginBottom: "1rem", marginTop: 0, lineHeight: 1.5 },
 
   form: { display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1.5rem" },
+  formEmbebido: { display: "flex", flexDirection: "column", gap: "0.5rem", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0.6rem", padding: "0.85rem", marginBottom: "1rem" },
   formRow: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
   field: { display: "flex", flexDirection: "column", gap: "0.3rem", flex: 1, minWidth: 150 },
   label: { fontSize: "0.85rem", fontWeight: 700, color: "#374151" },
