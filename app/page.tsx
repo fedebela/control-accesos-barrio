@@ -7,7 +7,7 @@ import {
   type ResultadoBusqueda, type EstadoAutorizacion, type Operador,
 } from "@/app/actions";
 import { parseDniEscaneado, formatearFecha, calcularEdad, type DniEscaneado } from "@/lib/dni";
-import { TIPOS, RUBROS_PROVEEDOR, MEDIOS_AUTORIZACION, etiquetaRubro } from "@/lib/constantes";
+import { TIPOS, RUBROS_PROVEEDOR, MEDIOS_AUTORIZACION, etiquetaRubro, etiquetaMedio } from "@/lib/constantes";
 
 // ---------------------------------------------------------------- PhotoInput
 
@@ -469,13 +469,41 @@ export default function HomePage() {
                     {mode === "salida" ? "Última entrada" : "Último registro"}
                   </h4>
                   {(() => {
-                    const r = (mode === "salida" ? resultado.ultimaEntrada : resultado.ultimoRegistro)!;
+                    const esSalida = mode === "salida";
+                    const r = (esSalida ? resultado.ultimaEntrada : resultado.ultimoRegistro)!;
+                    const lotesPrevios = esSalida
+                      ? resultado.lotesUltimaEntrada
+                      : resultado.lotesUltimoRegistro;
+
                     return (
                       <>
                         <Row label="Fecha" value={new Date(r.fecha_hora).toLocaleString("es-AR")} />
-                        <Row label="Patente" value={r.patente || "—"} />
-                        <Row label="Lotes" value={resultado.lotesUltimaEntrada.join(", ") || r.lote_destino || "—"} />
                         <Row label="Movimiento" value={r.es_entrada ? "Entrada" : "Salida"} />
+
+                        {/* Cada lote con los apellidos de sus residentes */}
+                        {lotesPrevios.length > 0 ? (
+                          lotesPrevios.map((l) => (
+                            <Row
+                              key={l}
+                              label={lotesPrevios.length > 1 ? `Lote ${l}` : "Lote"}
+                              value={
+                                resultado.apellidosDeLotes[l]
+                                  ? `${l} — ${resultado.apellidosDeLotes[l]}`
+                                  : `${l} — sin residente cargado`
+                              }
+                            />
+                          ))
+                        ) : (
+                          <Row label="Lote" value={r.lote_destino || "—"} />
+                        )}
+
+                        <Row label="Patente" value={r.patente || "—"} />
+                        {r.autorizado_por && (
+                          <Row
+                            label="Autorizó"
+                            value={`${r.autorizado_por}${r.autorizacion_medio ? ` (${etiquetaMedio(r.autorizacion_medio)})` : ""}`}
+                          />
+                        )}
                         {r.operador_nombre && <Row label="Registró" value={r.operador_nombre} />}
                       </>
                     );

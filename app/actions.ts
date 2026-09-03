@@ -101,6 +101,10 @@ export type ResultadoBusqueda = {
   ultimaEntrada: Registro | null;
   /** Lotes de la ultima entrada. Se precargan y se pueden modificar. */
   lotesUltimaEntrada: string[];
+  /** Lotes del ultimo movimiento, sea entrada o salida. */
+  lotesUltimoRegistro: string[];
+  /** Apellidos de los residentes de esos lotes, para mostrarlos en el preview. */
+  apellidosDeLotes: Record<string, string>;
   /** Rubro de proveedor usado la ultima vez. */
   subtipoPrevio: string;
 };
@@ -867,6 +871,8 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     ultimoRegistro: null,
     ultimaEntrada: null,
     lotesUltimaEntrada: [],
+    lotesUltimoRegistro: [],
+    apellidosDeLotes: {},
     subtipoPrevio: "",
   };
 
@@ -939,20 +945,29 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       tieneRegistro: Boolean(ultimoRegistro),
     });
 
-    // Lotes de la ultima entrada, para precargar la lista de un proveedor
-    // que vuelve a anunciarse en los mismos lotes.
-    let lotesUltimaEntrada: string[] = [];
-    if (ultimaEntrada?.id) {
+    // Lotes de cada movimiento. Los de la ultima entrada precargan la lista de
+    // un proveedor que vuelve a anunciarse en los mismos lotes; los del ultimo
+    // movimiento se muestran en el preview.
+    const lotesDe = async (reg: any): Promise<string[]> => {
+      if (!reg?.id) return [];
       const filas = (await sql`
         SELECT lote FROM registro_lotes
-        WHERE registro_id = ${ultimaEntrada.id}
+        WHERE registro_id = ${reg.id}
         ORDER BY id
       `) as any[];
-      lotesUltimaEntrada = filas.map((f) => f.lote as string);
-    }
-    if (lotesUltimaEntrada.length === 0 && ultimaEntrada?.lote_destino) {
-      lotesUltimaEntrada = [ultimaEntrada.lote_destino];
-    }
+      const l = filas.map((f) => f.lote as string);
+      return l.length > 0 ? l : reg.lote_destino ? [reg.lote_destino] : [];
+    };
+
+    const [lotesUltimaEntrada, lotesUltimoRegistro] = await Promise.all([
+      lotesDe(ultimaEntrada),
+      ultimaEntrada?.id === ultimoRegistro?.id ? lotesDe(ultimaEntrada) : lotesDe(ultimoRegistro),
+    ]);
+
+    const apellidosDeLotes = await apellidosPorLote(sql, [
+      ...lotesUltimaEntrada,
+      ...lotesUltimoRegistro,
+    ]);
 
     return {
       persona,
@@ -961,6 +976,8 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       ultimoRegistro,
       ultimaEntrada,
       lotesUltimaEntrada,
+      lotesUltimoRegistro,
+      apellidosDeLotes,
       subtipoPrevio: ultimaEntrada?.subtipo || ultimoRegistro?.subtipo || "",
     };
   } catch (error) {
@@ -1003,35 +1020,42 @@ async function tieneAutorizacionVigente(sql: ReturnType<typeof getSql>, dni: str
  *
  * Se consultan todos los lotes de una sola vez para no hacer una llamada por lote.
  */
-export async function getApellidosPorLote(lotes: string[]): Promise<Record<string, string>> {
+async function apellidosPorLote(
+  sql: ReturnType<typeof getSql>,
+  lotes: string[]
+): Promise<Record<string, string>> {
   const limpios = Array.from(
     new Set((lotes || []).map((l) => String(l).trim()).filter(Boolean))
   );
   if (limpios.length === 0) return {};
 
+  const filas = (await sql`
+    SELECT lower(lote) AS clave,
+           string_agg(DISTINCT apellido, ' / ' ORDER BY apellido) AS apellidos
+    FROM residentes
+    WHERE lower(lote) = ANY(${limpios.map((l) => l.toLowerCase())})
+    GROUP BY lower(lote)
+  `) as any[];
+
+  const porClave = new Map(filas.map((f) => [f.clave as string, f.apellidos as string]));
+
+  // Se devuelve con el lote tal como lo escribio el operador.
+  const salida: Record<string, string> = {};
+  for (const l of limpios) salida[l] = porClave.get(l.toLowerCase()) || "";
+  return salida;
+}
+
+export async function getApellidosPorLote(lotes: string[]): Promise<Record<string, string>> {
   try {
     await ensureTables();
-    const sql = getSql();
-
-    const filas = (await sql`
-      SELECT lower(lote) AS clave,
-             string_agg(DISTINCT apellido, ' / ' ORDER BY apellido) AS apellidos
-      FROM residentes
-      WHERE lower(lote) = ANY(${limpios.map((l) => l.toLowerCase())})
-      GROUP BY lower(lote)
-    `) as any[];
-
-    const porClave = new Map(filas.map((f) => [f.clave as string, f.apellidos as string]));
-
-    // Se devuelve con el lote tal como lo escribio el operador.
-    const salida: Record<string, string> = {};
-    for (const l of limpios) salida[l] = porClave.get(l.toLowerCase()) || "";
-    return salida;
+    return await apellidosPorLote(getSql(), lotes);
   } catch (error) {
     console.error("Error al obtener apellidos por lote:", error);
     return {};
   }
 }
+
+
 
 /** Residentes de un lote, para poder pedirles autorizacion por telefono o WhatsApp. */
 export async function getResidentesDeLote(lote: string) {
