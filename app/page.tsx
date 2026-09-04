@@ -404,6 +404,15 @@ function PantallaAccesos() {
             <input type="checkbox" checked={manualMode} onChange={(e) => activarManual(e.target.checked)} />
             Carga manual — persona sin registro previo (requiere motivo)
           </label>
+
+          {/* Queda fijo acá, visible desde que se abre la pantalla: el operador
+              tiene que ver con qué nombre va a quedar firmado el movimiento
+              antes de empezar a cargarlo, no recién al final. */}
+          <SelectorOperador
+            operadores={operadores}
+            valor={operadorId}
+            onChange={setOperadorId}
+          />
         </div>
 
         {/* ---------------- DNI sin datos ---------------- */}
@@ -546,11 +555,6 @@ function PantallaAccesos() {
               />
             )}
 
-            <SelectorOperador
-              operadores={operadores}
-              valor={operadorId}
-              onChange={setOperadorId}
-            />
 
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
@@ -637,11 +641,6 @@ function PantallaAccesos() {
               />
             )}
 
-            <SelectorOperador
-              operadores={operadores}
-              valor={operadorId}
-              onChange={setOperadorId}
-            />
 
             {estado?.error && <div style={styles.error}>{estado.error}</div>}
             {estado?.success && <div style={styles.success}>{estado.message}</div>}
@@ -764,10 +763,12 @@ function motivoBloqueo(
 }
 
 /**
- * Quien registra el movimiento. Va al final, pegado al boton: es el ultimo
- * dato que el operador confirma antes de dar la entrada o la salida.
- * Viene preseleccionado el ultimo que registro, asi que casi siempre se deja
- * como esta y solo se cambia al relevar el turno.
+ * Quien registra el movimiento.
+ *
+ * Viene preseleccionado el ultimo operador que registro, asi que en general se
+ * deja como esta y solo se cambia al relevar el turno. Justamente por eso
+ * conviene que este a la vista desde el inicio: si quedo el nombre del turno
+ * anterior, se corrige antes de empezar a cargar y no despues.
  */
 function SelectorOperador({
   operadores, valor, onChange,
