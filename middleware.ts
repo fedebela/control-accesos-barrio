@@ -17,7 +17,8 @@ import { verificarSesion, COOKIE_SESION } from "@/lib/auth-token";
 
 const RUTAS_GESTION = ["/maestros", "/informes", "/importar"];
 const RUTAS_RESIDENTE = ["/residente"];
-const RUTAS_PUBLICAS = ["/login"];
+const RUTAS_PUBLICAS = ["/login", "/equipo"];
+const COOKIE_EQUIPO = "equipo";
 
 function conexion() {
   const url =
@@ -86,15 +87,33 @@ export async function middleware(req: NextRequest) {
   const sql = conexion();
   if (sql) {
     try {
+      const idEquipo = req.cookies.get(COOKIE_EQUIPO)?.value || "";
+
+      // Una sola consulta: sesion vigente, gestion y equipo autorizado.
       const filas = (await sql`
-        SELECT gestion_habilitada FROM sesiones
-        WHERE id = ${payload.sid} AND expira_en > NOW()
-        LIMIT 1
+        SELECT
+          EXISTS(SELECT 1 FROM sesiones WHERE id = ${payload.sid} AND expira_en > NOW()) AS sesion_ok,
+          COALESCE((
+            SELECT gestion_habilitada FROM sesiones
+            WHERE id = ${payload.sid} AND expira_en > NOW()
+          ), FALSE) AS gestion,
+          (SELECT COUNT(*)::int FROM dispositivos WHERE activo = TRUE) AS equipos_activos,
+          EXISTS(
+            SELECT 1 FROM dispositivos WHERE activo = TRUE AND id = ${idEquipo}
+          ) AS equipo_ok
       `) as any[];
 
-      if (filas.length === 0) return redirigirALogin(req, "vencida");
+      const d = filas[0];
+      if (!d?.sesion_ok) return redirigirALogin(req, "vencida");
 
-      if (RUTAS_GESTION.some((r) => pathname.startsWith(r)) && !filas[0].gestion_habilitada) {
+      // El control de equipos recien se activa cuando hay al menos uno dado de
+      // alta. Mientras no haya ninguno la app funciona normal, para no dejar a
+      // nadie afuera antes de poder configurarlo.
+      if (!esResidente && d.equipos_activos > 0 && !d.equipo_ok) {
+        return redirigir(req, "/equipo");
+      }
+
+      if (RUTAS_GESTION.some((r) => pathname.startsWith(r)) && !d.gestion) {
         return pedirGestion(req, pathname);
       }
 

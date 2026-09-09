@@ -55,6 +55,17 @@ async function asegurarDatosIniciales() {
       ON CONFLICT (clave) DO NOTHING
     `;
   }
+
+  const equipos = (await sql`
+    SELECT 1 FROM configuracion WHERE clave = ${CLAVE_EQUIPOS} LIMIT 1
+  `) as any[];
+  if (equipos.length === 0) {
+    await sql`
+      INSERT INTO configuracion (clave, valor)
+      VALUES (${CLAVE_EQUIPOS}, ${await hashearClave(CLAVE_EQUIPOS_INICIAL)})
+      ON CONFLICT (clave) DO NOTHING
+    `;
+  }
 }
 
 // ========== SESION ==========
@@ -495,6 +506,219 @@ export async function cambiarMiClave(prevState: any, formData: FormData) {
     return { success: true, message: "Contraseña actualizada." };
   } catch (error: any) {
     return { error: error.message };
+  }
+}
+
+// ========== EQUIPOS AUTORIZADOS ==========
+//
+// Ata la aplicacion a las maquinas del puesto. No se maneja desde Maestros a
+// proposito: si el supervisor pudiera dar de alta equipos con la clave de
+// gestion, el control se diluye. Tiene su propia clave, separada de todo lo
+// demas, que administra quien mantiene el sistema.
+
+const COOKIE_EQUIPO = "equipo";
+const CLAVE_EQUIPOS = "clave_equipos";
+const CLAVE_INTENTOS = "intentos_equipos";
+const CLAVE_EQUIPOS_INICIAL = "12345678";
+const MAX_INTENTOS = 5;
+const MINUTOS_BLOQUEO = 15;
+
+export type Dispositivo = {
+  id: string;
+  nombre: string;
+  creado_en: string;
+  ultimo_uso: string | null;
+  activo: boolean;
+  /** true si es el equipo desde el que se esta mirando */
+  esteEquipo: boolean;
+};
+
+async function idEquipoActual(): Promise<string> {
+  return (await cookies()).get(COOKIE_EQUIPO)?.value || "";
+}
+
+/**
+ * Valida la clave de equipos con limite de intentos.
+ * Es una pantalla publica protegida solo por contraseña, asi que sin el limite
+ * seria facil de probar por fuerza bruta.
+ */
+async function validarClaveEquipos(clave: string): Promise<string | null> {
+  await asegurarDatosIniciales();
+  const sql = getSql();
+
+  const estado = (await sql`
+    SELECT valor FROM configuracion WHERE clave = ${CLAVE_INTENTOS} LIMIT 1
+  `) as any[];
+
+  let intentos = 0;
+  let bloqueadoHasta = 0;
+  if (estado[0]?.valor) {
+    try {
+      const d = JSON.parse(estado[0].valor);
+      intentos = Number(d.intentos) || 0;
+      bloqueadoHasta = Number(d.hasta) || 0;
+    } catch { /* valor corrupto: se reinicia */ }
+  }
+
+  if (bloqueadoHasta > Date.now()) {
+    const min = Math.ceil((bloqueadoHasta - Date.now()) / 60000);
+    return `Demasiados intentos fallidos. Esperá ${min} minuto${min > 1 ? "s" : ""}.`;
+  }
+
+  const cfg = (await sql`
+    SELECT valor FROM configuracion WHERE clave = ${CLAVE_EQUIPOS} LIMIT 1
+  `) as any[];
+
+  const guardarIntentos = (n: number, hasta: number) => sql`
+    INSERT INTO configuracion (clave, valor)
+    VALUES (${CLAVE_INTENTOS}, ${JSON.stringify({ intentos: n, hasta })})
+    ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = NOW()
+  `;
+
+  if (!cfg[0] || !(await verificarClave(clave, cfg[0].valor))) {
+    const nuevos = intentos + 1;
+    if (nuevos >= MAX_INTENTOS) {
+      await guardarIntentos(0, Date.now() + MINUTOS_BLOQUEO * 60000);
+      return `Clave incorrecta. Se bloqueó el acceso por ${MINUTOS_BLOQUEO} minutos.`;
+    }
+    await guardarIntentos(nuevos, 0);
+    return `Clave incorrecta. Te quedan ${MAX_INTENTOS - nuevos} intentos.`;
+  }
+
+  if (intentos > 0) await guardarIntentos(0, 0);
+  return null;
+}
+
+async function listarDispositivos(): Promise<Dispositivo[]> {
+  const actual = await idEquipoActual();
+  const filas = (await getSql()`
+    SELECT id, nombre, creado_en, ultimo_uso, activo
+    FROM dispositivos ORDER BY activo DESC, creado_en DESC
+  `) as any[];
+  return filas.map((f) => ({ ...f, esteEquipo: f.id === actual })) as Dispositivo[];
+}
+
+/** Abre el panel: valida la clave y devuelve el estado actual. */
+export async function abrirPanelEquipos(clave: string) {
+  const error = await validarClaveEquipos(clave);
+  if (error) return { error };
+
+  try {
+    const dispositivos = await listarDispositivos();
+    return {
+      success: true,
+      dispositivos,
+      esteEquipoAutorizado: dispositivos.some((d) => d.esteEquipo && d.activo),
+      activos: dispositivos.filter((d) => d.activo).length,
+    };
+  } catch (e: any) {
+    return { error: e.message };
+  }
+}
+
+/** Da de alta el equipo desde el que se esta usando la pantalla. */
+export async function autorizarEsteEquipo(prevState: any, formData: FormData) {
+  const nombre = String(formData.get("nombre") || "").trim();
+  const clave = String(formData.get("clave") || "");
+
+  if (!nombre) return { error: "Poné un nombre para reconocer el equipo." };
+
+  const error = await validarClaveEquipos(clave);
+  if (error) return { error };
+
+  try {
+    const sql = getSql();
+    const actual = await idEquipoActual();
+
+    // Si este navegador ya tenia un equipo cargado, se renombra y reactiva en
+    // lugar de duplicarlo.
+    if (actual) {
+      const existe = (await sql`SELECT 1 FROM dispositivos WHERE id = ${actual} LIMIT 1`) as any[];
+      if (existe.length > 0) {
+        await sql`
+          UPDATE dispositivos SET nombre = ${nombre}, activo = TRUE, ultimo_uso = NOW()
+          WHERE id = ${actual}
+        `;
+        return { success: true, message: `Equipo actualizado como "${nombre}".` };
+      }
+    }
+
+    const id = generarId();
+    await sql`
+      INSERT INTO dispositivos (id, nombre, ultimo_uso, activo)
+      VALUES (${id}, ${nombre}, NOW(), TRUE)
+    `;
+    (await cookies()).set(COOKIE_EQUIPO, id, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+    });
+
+    return { success: true, message: `Este equipo quedó autorizado como "${nombre}".` };
+  } catch (e: any) {
+    return { error: e.message || "No se pudo autorizar el equipo." };
+  }
+}
+
+export async function cambiarEstadoEquipo(id: string, activo: boolean, clave: string) {
+  const error = await validarClaveEquipos(clave);
+  if (error) return { error };
+
+  try {
+    const sql = getSql();
+
+    if (!activo) {
+      // Quedarse sin equipos activos apagaria el control y, peor, dejaria a la
+      // guardia sin poder entrar desde ningun lado.
+      const activos = (await sql`
+        SELECT COUNT(*)::int AS n FROM dispositivos WHERE activo = TRUE
+      `) as any[];
+      const esActivo = (await sql`
+        SELECT activo FROM dispositivos WHERE id = ${id} LIMIT 1
+      `) as any[];
+
+      if (esActivo[0]?.activo && activos[0]?.n <= 1) {
+        return {
+          error:
+            "Es el único equipo autorizado. Si lo das de baja, nadie va a poder " +
+            "entrar al puesto. Autorizá otro primero.",
+        };
+      }
+    }
+
+    await sql`UPDATE dispositivos SET activo = ${activo} WHERE id = ${id}`;
+    return {
+      success: true,
+      message: activo ? "Equipo reactivado." : "Equipo dado de baja.",
+      dispositivos: await listarDispositivos(),
+    };
+  } catch (e: any) {
+    return { error: e.message };
+  }
+}
+
+export async function cambiarClaveEquipos(prevState: any, formData: FormData) {
+  const actual = String(formData.get("clave_actual") || "");
+  const nueva = String(formData.get("clave_nueva") || "");
+  const repetir = String(formData.get("clave_repetir") || "");
+
+  const error = await validarClaveEquipos(actual);
+  if (error) return { error };
+
+  const problema = validarClave(nueva, LARGO_CLAVE_INGRESO);
+  if (problema) return { error: problema };
+  if (nueva !== repetir) return { error: "Las contraseñas nuevas no coinciden." };
+
+  try {
+    await getSql()`
+      UPDATE configuracion SET valor = ${await hashearClave(nueva)}, actualizado_en = NOW()
+      WHERE clave = ${CLAVE_EQUIPOS}
+    `;
+    return { success: true, message: "Clave de equipos actualizada." };
+  } catch (e: any) {
+    return { error: e.message };
   }
 }
 

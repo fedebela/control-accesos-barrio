@@ -183,6 +183,24 @@ async function createTables() {
     );
   `;
 
+  // ---------- DISPOSITIVOS ----------
+  // Equipos habilitados a operar el puesto. Ata la aplicacion a la maquina de
+  // la guardia, no a la red: la MAC del router no viaja mas alla del primer
+  // salto, asi que el servidor nunca la ve. Esto es lo que si se puede hacer.
+  //
+  // Mientras no haya ningun equipo dado de alta, el control queda inactivo.
+  // Se activa solo con el primero, para no dejar a nadie afuera por accidente.
+  await sql`
+    CREATE TABLE IF NOT EXISTS dispositivos (
+      id VARCHAR(64) PRIMARY KEY,
+      nombre VARCHAR(100) NOT NULL,
+      creado_por VARCHAR(50),
+      creado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      ultimo_uso TIMESTAMP WITH TIME ZONE,
+      activo BOOLEAN DEFAULT TRUE
+    );
+  `;
+
   // ---------- CONFIGURACION ----------
   // Pares clave/valor. Por ahora guarda la clave de gestion, que es unica y
   // compartida: la usa el supervisor dentro de la sesion del guardia.
