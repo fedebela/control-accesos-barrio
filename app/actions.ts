@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { ensureTables, getSql } from "@/lib/db";
 import { exigirGestion, getSesionResidente } from "@/app/actions-auth";
+import { auditar } from "@/lib/auditoria";
 
 // ========== TYPES ==========
 
@@ -410,6 +411,10 @@ export async function autorizarDesdeResidente(prevState: any, formData: FormData
 
     if (otorgados === 0) return { error: "No se pudo autorizar a nadie de la lista." };
 
+    await auditar(
+      "autorizacion_otorgada",
+      `Residente del lote ${lote} · ${tipo} · ${otorgados} persona${otorgados > 1 ? "s" : ""}: ${dnis.join(", ")}`
+    );
     revalidatePath("/residente");
     revalidatePath("/");
     return {
@@ -434,6 +439,7 @@ export async function revocarDesdeResidente(dni: string) {
       DELETE FROM autorizados
       WHERE dni = ${dni} AND lower(COALESCE(lote, '')) = ${sesion.lote.toLowerCase()}
     `;
+    await auditar("autorizacion_revocada", `Residente del lote ${sesion.lote} · DNI ${dni}`);
     revalidatePath("/residente");
     revalidatePath("/");
     return { success: true, message: "Autorización revocada." };
@@ -510,6 +516,10 @@ export async function importarPersonas(
       else res.creados++;
     }
 
+    await auditar(
+      "importacion",
+      `Personas · ${res.creados} creadas, ${res.actualizados} actualizadas, ${res.omitidos} omitidas`
+    );
     revalidatePath("/maestros");
     revalidatePath("/");
     return { ...res, success: true };
@@ -582,6 +592,10 @@ export async function importarAutorizados(filas: FilaImportacion[]): Promise<Res
       else res.creados++;
     }
 
+    await auditar(
+      "importacion",
+      `Autorizados · ${res.creados} creados, ${res.actualizados} actualizados, ${res.omitidos} omitidos`
+    );
     revalidatePath("/maestros");
     revalidatePath("/");
     return { ...res, success: true };
@@ -686,6 +700,7 @@ export async function createOperador(prevState: any, formData: FormData) {
 
     revalidatePath("/maestros");
     revalidatePath("/");
+    await auditar("operador_alta", `${apellido}, ${nombre} — DNI ${dni}`);
     return { success: true, message: "Operador guardado correctamente." };
   } catch (error: any) {
     return { error: error.message || "Error al guardar operador." };
@@ -723,6 +738,7 @@ export async function updateOperador(id: number, prevState: any, formData: FormD
 
     revalidatePath("/maestros");
     revalidatePath("/");
+    await auditar("operador_edit", `${apellido}, ${nombre} — DNI ${dni}`);
     return { success: true, message: "Operador actualizado." };
   } catch (error: any) {
     return { error: error.message };
@@ -737,6 +753,7 @@ export async function deleteOperador(id: number) {
     await sql`UPDATE operadores SET activo = FALSE WHERE id = ${id}`;
     revalidatePath("/maestros");
     revalidatePath("/");
+    await auditar("operador_baja", `Operador id ${id}`);
     return { success: true, message: "Operador dado de baja." };
   } catch (error: any) {
     return { error: error.message };
@@ -915,6 +932,7 @@ export async function createResidente(prevState: any, formData: FormData) {
 
     await upsertPersona(sql, { dni, nombre, apellido, foto_url }, { sobrescribir: true, motivo: "Alta/edición de residente" });
 
+    await auditar("residente_alta", `${apellido}, ${nombre} — Lote ${lote} — DNI ${dni}`);
     revalidatePath("/maestros");
     revalidatePath("/");
     return { success: true, message: "Residente guardado correctamente." };
@@ -949,6 +967,7 @@ export async function updateResidente(id: number, prevState: any, formData: Form
 
     await upsertPersona(sql, { dni, nombre, apellido, foto_url }, { sobrescribir: true, motivo: "Edición de residente" });
 
+    await auditar("residente_edit", `${apellido}, ${nombre} — Lote ${lote} — DNI ${dni}`);
     revalidatePath("/maestros");
     revalidatePath("/");
     return { success: true, message: "Residente actualizado." };
@@ -961,7 +980,12 @@ export async function deleteResidente(id: number) {
   try {
     await ensureTables();
     const sql = getSql();
+    const r = (await sql`SELECT apellido, nombre, lote FROM residentes WHERE id = ${id} LIMIT 1`) as any[];
     await sql`DELETE FROM residentes WHERE id = ${id}`;
+    await auditar(
+      "residente_baja",
+      r[0] ? `${r[0].apellido}, ${r[0].nombre} — Lote ${r[0].lote}` : `id ${id}`
+    );
     revalidatePath("/maestros");
     return { success: true };
   } catch (error: any) {
@@ -1086,6 +1110,10 @@ export async function autorizarPersonas(prevState: any, formData: FormData) {
     let message = `Se otorgó ${etiqueta} a ${otorgados.length} persona${otorgados.length > 1 ? "s" : ""} del lote ${lote}.`;
     if (omitidos.length > 0) message += ` Omitidos: ${omitidos.join(", ")}.`;
 
+    await auditar(
+      "autorizacion_otorgada",
+      `Lote ${lote} · ${tipo} · ${otorgados.length}: ${otorgados.join(", ")}`
+    );
     return { success: true, message };
   } catch (error: any) {
     return { error: error.message || "Error al otorgar la autorización." };
@@ -1172,6 +1200,7 @@ export async function revocarAutorizacion(dni: string, lote?: string) {
       await sql`DELETE FROM autorizados WHERE dni = ${dni}`;
     }
 
+    await auditar("autorizacion_revocada", `DNI ${dni}${lote?.trim() ? ` · Lote ${lote.trim()}` : " · todos los lotes"}`);
     revalidatePath("/maestros");
     revalidatePath("/residente");
     revalidatePath("/");

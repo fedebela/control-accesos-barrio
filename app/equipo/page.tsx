@@ -3,8 +3,10 @@
 import { useActionState, useEffect, useState } from "react";
 import {
   abrirPanelEquipos, autorizarEsteEquipo, cambiarEstadoEquipo, cambiarClaveEquipos,
-  type Dispositivo,
+  getAuditoria,
+  type Dispositivo, type EventoAuditoria,
 } from "@/app/actions-auth";
+import { ETIQUETAS_AUDITORIA, ACCIONES_SENSIBLES } from "@/lib/auditoria-constantes";
 
 /**
  * Administracion de equipos autorizados.
@@ -191,6 +193,9 @@ export default function EquipoPage() {
         )}
       </div>
 
+      {/* ---------- Actividad ---------- */}
+      <Actividad clave={clave} />
+
       {/* ---------- Clave ---------- */}
       <div style={styles.tarjeta}>
         <button type="button" onClick={() => setVerClave((v) => !v)} style={styles.linkBoton}>
@@ -215,6 +220,126 @@ export default function EquipoPage() {
           </form>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Actividad registrada: autenticacion y administracion.
+ * Los movimientos de entrada y salida no aparecen acá; están en Informes.
+ */
+function Actividad({ clave }: { clave: string }) {
+  const hoy = () => new Date().toISOString().slice(0, 10);
+  const haceUnaSemana = () =>
+    new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  const [desde, setDesde] = useState(haceUnaSemana());
+  const [hasta, setHasta] = useState(hoy());
+  const [accion, setAccion] = useState("");
+  const [usuario, setUsuario] = useState("");
+  const [eventos, setEventos] = useState<EventoAuditoria[]>([]);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [abierto, setAbierto] = useState(false);
+
+  async function consultar() {
+    setCargando(true);
+    setError(null);
+    const r = await getAuditoria(clave, { desde, hasta, accion, usuario });
+    if (r.error) setError(r.error);
+    else setEventos(r.eventos || []);
+    setCargando(false);
+  }
+
+  useEffect(() => {
+    if (abierto && eventos.length === 0) consultar();
+  }, [abierto]);
+
+  const fallidos = eventos.filter((e) => e.accion === "login_fallido").length;
+
+  return (
+    <div style={styles.tarjeta}>
+      <button type="button" onClick={() => setAbierto((v) => !v)} style={styles.linkBoton}>
+        {abierto ? "Ocultar actividad" : "Ver actividad del sistema"}
+      </button>
+
+      {abierto && (
+        <div style={{ marginTop: "0.9rem" }}>
+          <p style={styles.ayuda}>
+            Quién entró, quién desbloqueó la gestión y quién tocó los maestros. Las
+            entradas y salidas de personas no están acá: van en Informes.
+          </p>
+
+          <div style={styles.fila}>
+            <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={styles.input} />
+            <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} style={styles.input} />
+            <select value={accion} onChange={(e) => setAccion(e.target.value)} style={styles.input}>
+              <option value="">Todas las acciones</option>
+              {Object.entries(ETIQUETAS_AUDITORIA).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <input
+              value={usuario}
+              onChange={(e) => setUsuario(e.target.value)}
+              placeholder="Usuario"
+              style={styles.input}
+            />
+            <button type="button" onClick={consultar} disabled={cargando} style={styles.botonChico}>
+              {cargando ? "Buscando…" : "Buscar"}
+            </button>
+          </div>
+
+          {error && <div style={styles.error}>{error}</div>}
+
+          {fallidos > 0 && (
+            <div style={styles.alerta}>
+              Hay {fallidos} intento{fallidos > 1 ? "s" : ""} de inicio de sesión fallido
+              {fallidos > 1 ? "s" : ""} en el período.
+            </div>
+          )}
+
+          {eventos.length === 0 && !cargando ? (
+            <p style={styles.ayuda}>Sin actividad registrada en el período.</p>
+          ) : (
+            <div style={styles.tablaWrap}>
+              <table style={styles.tabla}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Fecha</th>
+                    <th style={styles.th}>Acción</th>
+                    <th style={styles.th}>Usuario</th>
+                    <th style={styles.th}>Equipo</th>
+                    <th style={styles.th}>IP</th>
+                    <th style={styles.th}>Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eventos.map((e) => (
+                    <tr key={e.id} style={styles.tr}>
+                      <td style={styles.td}>{new Date(e.fecha_hora).toLocaleString("es-AR")}</td>
+                      <td style={styles.td}>
+                        <span style={ACCIONES_SENSIBLES.has(e.accion) ? styles.chipSensible : styles.chipNormal}>
+                          {ETIQUETAS_AUDITORIA[e.accion] || e.accion}
+                        </span>
+                      </td>
+                      <td style={styles.td}>{e.usuario.trim() || "—"}</td>
+                      <td style={styles.td}>{e.equipo || "—"}</td>
+                      <td style={styles.td}>{e.ip || "—"}</td>
+                      <td style={styles.tdDetalle}>{e.detalle || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {eventos.length >= 500 && (
+                <p style={styles.ayuda}>
+                  Se muestran los 500 eventos más recientes. Acotá el período para ver el resto.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -257,6 +382,16 @@ const styles: Record<string, React.CSSProperties> = {
 
   btnBaja: { padding: "0.45rem 0.85rem", borderRadius: "0.5rem", border: "1px solid #fecaca", background: "#fff1f2", color: "#b91c1c", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer" },
   btnAlta: { padding: "0.45rem 0.85rem", borderRadius: "0.5rem", border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer" },
+
+  alerta: { padding: "0.7rem 0.85rem", borderRadius: "0.6rem", background: "#fffbeb", border: "1px solid #fcd34d", color: "#92400e", fontSize: "0.88rem", fontWeight: 700, marginBottom: "0.8rem" },
+  tablaWrap: { overflowX: "auto" },
+  tabla: { width: "100%", borderCollapse: "collapse" },
+  th: { textAlign: "left", padding: "0.45rem 0.6rem", borderBottom: "2px solid #e2e8f0", fontSize: "0.76rem", fontWeight: 700, color: "#475569", whiteSpace: "nowrap" },
+  tr: { borderBottom: "1px solid #f1f5f9" },
+  td: { padding: "0.45rem 0.6rem", fontSize: "0.82rem", color: "#334155", whiteSpace: "nowrap" },
+  tdDetalle: { padding: "0.45rem 0.6rem", fontSize: "0.8rem", color: "#64748b", maxWidth: 260 },
+  chipNormal: { padding: "0.1rem 0.45rem", borderRadius: "0.25rem", background: "#f1f5f9", color: "#475569", fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap" },
+  chipSensible: { padding: "0.1rem 0.45rem", borderRadius: "0.25rem", background: "#fee2e2", color: "#991b1b", fontWeight: 700, fontSize: "0.72rem", whiteSpace: "nowrap" },
 
   error: { padding: "0.7rem 0.85rem", borderRadius: "0.6rem", background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: "0.88rem", fontWeight: 600, marginTop: "0.6rem" },
   exito: { padding: "0.7rem 0.85rem", borderRadius: "0.6rem", background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#047857", fontSize: "0.88rem", fontWeight: 600, marginTop: "0.6rem" },

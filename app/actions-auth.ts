@@ -11,6 +11,7 @@ import {
   firmarSesion, verificarSesion, COOKIE_SESION, HORAS_SESION, HORAS_SESION_RESIDENTE,
   type PayloadSesion, type RolUsuario,
 } from "@/lib/auth-token";
+import { auditar } from "@/lib/auditoria";
 
 const CLAVE_GESTION = "clave_gestion";
 
@@ -188,6 +189,7 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
     const u = filas[0];
     // Mismo mensaje exista o no el usuario: no conviene revelar cuales existen.
     if (!u || !u.activo || !(await verificarClave(clave, u.clave_hash))) {
+      await auditar("login_fallido", `Usuario probado: ${usuario}`, { usuario: " ", rol: " " });
       return { error: "Usuario o contraseña incorrectos." };
     }
 
@@ -233,6 +235,7 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
           };
         }
 
+        await auditar("login_forzado", `${usuario} cerró la sesión de ${otra.usuario}`, { usuario, rol });
         await sql`DELETE FROM sesiones WHERE id = ANY(${activas.map((a) => a.id)})`;
       }
     }
@@ -259,6 +262,7 @@ export async function iniciarSesion(prevState: any, formData: FormData) {
       horas
     );
 
+    await auditar("login_ok", u.descripcion || u.usuario, { usuario: u.usuario, rol });
     return { success: true, rol };
   } catch (error: any) {
     return { error: error.message || "No se pudo iniciar sesión." };
@@ -272,6 +276,7 @@ export async function cerrarSesion() {
 
     if (payload) {
       await ensureTables();
+      await auditar("logout", "", { usuario: payload.usuario, rol: payload.rol });
       await getSql()`DELETE FROM sesiones WHERE id = ${payload.sid}`;
     }
   } catch {
@@ -302,6 +307,7 @@ export async function desbloquearGestion(prevState: any, formData: FormData) {
     }
 
     await sql`UPDATE sesiones SET gestion_habilitada = TRUE WHERE id = ${sesion.sid}`;
+    await auditar("gestion_abierta", "Acceso a maestros, informes e importación");
 
     await guardarCookie({
       sid: sesion.sid,
@@ -326,6 +332,7 @@ export async function bloquearGestion() {
     if (!sesion) return { success: true };
 
     await getSql()`UPDATE sesiones SET gestion_habilitada = FALSE WHERE id = ${sesion.sid}`;
+    await auditar("gestion_cerrada", "");
 
     await guardarCookie({
       sid: sesion.sid,
@@ -406,6 +413,7 @@ export async function crearAccesoResidente(residenteId: number) {
               ${await hashearClave(clave)}, 'residente', ${residenteId}, TRUE)
     `;
 
+    await auditar("acceso_alta", `${r.apellido}, ${r.nombre} — Lote ${r.lote} (${usuario})`);
     revalidatePath("/maestros");
     return {
       success: true,
@@ -439,6 +447,7 @@ export async function blanquearAccesoResidente(residenteId: number) {
     // Se cierran las sesiones abiertas con la clave anterior.
     await sql`DELETE FROM sesiones WHERE usuario_id = ${filas[0].id}`;
 
+    await auditar("acceso_blanqueo", filas[0].usuario);
     revalidatePath("/maestros");
     return { success: true, usuario: filas[0].usuario, clave, message: "Contraseña regenerada." };
   } catch (error: any) {
@@ -453,6 +462,7 @@ export async function quitarAccesoResidente(residenteId: number) {
   try {
     const sql = getSql();
     await sql`DELETE FROM usuarios WHERE residente_id = ${residenteId}`;
+    await auditar("acceso_baja", `Residente id ${residenteId}`);
     revalidatePath("/maestros");
     return { success: true, message: "Acceso eliminado." };
   } catch (error: any) {
@@ -503,6 +513,7 @@ export async function cambiarMiClave(prevState: any, formData: FormData) {
     await sql`
       UPDATE usuarios SET clave_hash = ${await hashearClave(nueva)} WHERE id = ${sesion.usuarioId}
     `;
+    await auditar("clave_propia", "");
     return { success: true, message: "Contraseña actualizada." };
   } catch (error: any) {
     return { error: error.message };
@@ -639,6 +650,7 @@ export async function autorizarEsteEquipo(prevState: any, formData: FormData) {
           UPDATE dispositivos SET nombre = ${nombre}, activo = TRUE, ultimo_uso = NOW()
           WHERE id = ${actual}
         `;
+        await auditar("equipo_alta", `Reactivado: ${nombre}`);
         return { success: true, message: `Equipo actualizado como "${nombre}".` };
       }
     }
@@ -656,6 +668,7 @@ export async function autorizarEsteEquipo(prevState: any, formData: FormData) {
       maxAge: 365 * 24 * 3600,
     });
 
+    await auditar("equipo_alta", nombre);
     return { success: true, message: `Este equipo quedó autorizado como "${nombre}".` };
   } catch (e: any) {
     return { error: e.message || "No se pudo autorizar el equipo." };
@@ -688,7 +701,9 @@ export async function cambiarEstadoEquipo(id: string, activo: boolean, clave: st
       }
     }
 
+    const eq = (await sql`SELECT nombre FROM dispositivos WHERE id = ${id} LIMIT 1`) as any[];
     await sql`UPDATE dispositivos SET activo = ${activo} WHERE id = ${id}`;
+    await auditar(activo ? "equipo_reactivado" : "equipo_baja", eq[0]?.nombre || id);
     return {
       success: true,
       message: activo ? "Equipo reactivado." : "Equipo dado de baja.",
@@ -716,7 +731,60 @@ export async function cambiarClaveEquipos(prevState: any, formData: FormData) {
       UPDATE configuracion SET valor = ${await hashearClave(nueva)}, actualizado_en = NOW()
       WHERE clave = ${CLAVE_EQUIPOS}
     `;
+    await auditar("clave_equipos", "");
     return { success: true, message: "Clave de equipos actualizada." };
+  } catch (e: any) {
+    return { error: e.message };
+  }
+}
+
+// ========== LECTURA DE LA AUDITORIA ==========
+
+export type EventoAuditoria = {
+  id: number;
+  fecha_hora: string;
+  accion: string;
+  detalle: string;
+  usuario: string;
+  rol: string;
+  equipo: string;
+  ip: string;
+};
+
+/**
+ * Actividad registrada. Se consulta con la clave de equipos, no con la de
+ * gestion: quien administra el barrio no tiene que poder revisar su propio
+ * rastro. Y como la tabla es append-only, tampoco puede borrarlo.
+ */
+export async function getAuditoria(
+  clave: string,
+  filtros: { desde?: string; hasta?: string; accion?: string; usuario?: string } = {}
+) {
+  const error = await validarClaveEquipos(clave);
+  if (error) return { error };
+
+  try {
+    const sql = getSql();
+    const desde = filtros.desde?.trim() || null;
+    const hasta = filtros.hasta?.trim() || null;
+    const accion = filtros.accion?.trim() || null;
+    const usuario = filtros.usuario?.trim() ? `%${filtros.usuario.trim()}%` : null;
+
+    const eventos = (await sql`
+      SELECT a.id, a.fecha_hora, a.accion, COALESCE(a.detalle, '') AS detalle,
+             COALESCE(a.usuario, '') AS usuario, COALESCE(a.rol, '') AS rol,
+             COALESCE(d.nombre, '') AS equipo, COALESCE(a.ip, '') AS ip
+      FROM auditoria a
+      LEFT JOIN dispositivos d ON d.id = a.dispositivo_id
+      WHERE (${desde}::date IS NULL OR a.fecha_hora::date >= ${desde}::date)
+        AND (${hasta}::date IS NULL OR a.fecha_hora::date <= ${hasta}::date)
+        AND (${accion}::text IS NULL OR a.accion = ${accion})
+        AND (${usuario}::text IS NULL OR a.usuario ILIKE ${usuario})
+      ORDER BY a.fecha_hora DESC
+      LIMIT 500
+    `) as unknown as EventoAuditoria[];
+
+    return { success: true, eventos };
   } catch (e: any) {
     return { error: e.message };
   }
@@ -768,6 +836,7 @@ export async function crearUsuario(prevState: any, formData: FormData) {
       VALUES (${usuario}, ${descripcion || null}, ${await hashearClave(clave)}, TRUE)
     `;
 
+    await auditar("usuario_alta", usuario);
     revalidatePath("/maestros");
     return { success: true, message: `Usuario "${usuario}" creado.` };
   } catch (error: any) {
@@ -791,6 +860,7 @@ export async function cambiarClaveUsuario(prevState: any, formData: FormData) {
     await getSql()`
       UPDATE usuarios SET clave_hash = ${await hashearClave(clave)} WHERE id = ${id}
     `;
+    await auditar("clave_usuario", `Usuario id ${id}`);
     revalidatePath("/maestros");
     return { success: true, message: "Contraseña actualizada." };
   } catch (error: any) {
@@ -808,6 +878,7 @@ export async function activarUsuario(id: number, activo: boolean) {
     // Un usuario desactivado no puede seguir con la sesion abierta.
     if (!activo) await sql`DELETE FROM sesiones WHERE usuario_id = ${id}`;
 
+    await auditar("usuario_estado", `Usuario id ${id}: ${activo ? "activado" : "desactivado"}`);
     revalidatePath("/maestros");
     return { success: true, message: activo ? "Usuario activado." : "Usuario desactivado." };
   } catch (error: any) {
@@ -843,6 +914,7 @@ export async function cambiarClaveGestion(prevState: any, formData: FormData) {
       WHERE clave = ${CLAVE_GESTION}
     `;
 
+    await auditar("clave_gestion", "");
     revalidatePath("/maestros");
     return { success: true, message: "Clave de gestión actualizada." };
   } catch (error: any) {

@@ -201,6 +201,31 @@ async function createTables() {
     );
   `;
 
+  // ---------- AUDITORIA ----------
+  // Rastro de las acciones de autenticacion y administracion: quien entro,
+  // quien desbloqueo la gestion, quien toco los maestros y desde que equipo.
+  //
+  // Es APPEND-ONLY, igual que la bitacora de movimientos: no hay update ni
+  // delete. Un registro de auditoria que se puede editar no es auditoria.
+  //
+  // Se consulta desde /equipo, detras de la clave de equipos, para que quien
+  // administra el barrio no pueda leer ni borrar su propio rastro.
+  await sql`
+    CREATE TABLE IF NOT EXISTS auditoria (
+      id BIGSERIAL PRIMARY KEY,
+      fecha_hora TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      accion VARCHAR(40) NOT NULL,
+      detalle TEXT,
+      usuario VARCHAR(50),
+      rol VARCHAR(20),
+      dispositivo_id VARCHAR(64),
+      ip VARCHAR(60)
+    );
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_auditoria_fecha ON auditoria (fecha_hora DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_auditoria_accion ON auditoria (accion, fecha_hora DESC)`;
+
   // ---------- CONFIGURACION ----------
   // Pares clave/valor. Por ahora guarda la clave de gestion, que es unica y
   // compartida: la usa el supervisor dentro de la sesion del guardia.
