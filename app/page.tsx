@@ -474,6 +474,15 @@ function PantallaAccesos() {
               )}
               <Row label="Observaciones" value={resultado.persona!.observaciones || "—"} />
 
+              {mode === "entrada" && resultado.adentroDesde && (
+                <p style={styles.previewWarn}>
+                  Esta persona ya figura adentro desde el{" "}
+                  {new Date(resultado.adentroDesde).toLocaleString("es-AR")}, sin salida
+                  registrada. Si volvés a darle entrada van a quedar dos entradas seguidas.
+                  Fijate si no falta cargar la salida anterior.
+                </p>
+              )}
+
               {resultado.estado === "pendiente" && (
                 <p style={styles.previewWarn}>La invitación existe pero todavía no fue confirmada.</p>
               )}

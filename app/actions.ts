@@ -111,6 +111,11 @@ export type ResultadoBusqueda = {
   subtipoPrevio: string;
   /** Lotes que hoy tienen una autorizacion vigente para esta persona. */
   lotesAutorizados: string[];
+  /**
+   * Fecha de la entrada abierta, si el ultimo movimiento fue una entrada.
+   * Sirve para avisar antes de generar una entrada duplicada.
+   */
+  adentroDesde: string | null;
 };
 
 // ========== IDENTIDAD (tabla personas) ==========
@@ -1247,6 +1252,7 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
     apellidosDeLotes: {},
     subtipoPrevio: "",
     lotesAutorizados: [],
+    adentroDesde: null,
   };
 
   const dniLimpio = String(dni || "").trim();
@@ -1355,6 +1361,8 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       apellidosDeLotes,
       subtipoPrevio: ultimaEntrada?.subtipo || ultimoRegistro?.subtipo || "",
       lotesAutorizados,
+      // Si el ultimo movimiento fue una entrada, la persona figura adentro.
+      adentroDesde: ultimoRegistro?.es_entrada ? ultimoRegistro.fecha_hora : null,
     };
   } catch (error) {
     console.error("Error al buscar persona:", error);
@@ -1805,20 +1813,14 @@ export async function getRegistrosFiltrados(f: FiltrosInforme): Promise<Registro
           OR (
             r.tipo = 'proveedor'
             AND r.es_entrada = TRUE
-            -- Queda "sin salida" si no hay una salida posterior a esta entrada
-            -- y anterior a la siguiente entrada del mismo DNI. Asi se detectan
-            -- tanto al que sigue adentro como entradas viejas sin cerrar.
+            -- Una entrada esta abierta solo si es el ULTIMO movimiento de ese
+            -- DNI. Antes se emparejaba cada entrada con una salida dentro de su
+            -- ventana, y una entrada duplicada quedaba huerfana para siempre:
+            -- la salida cerraba la segunda y la primera no se podia cerrar
+            -- nunca, porque la bitacora es inalterable.
             AND NOT EXISTS (
-              SELECT 1 FROM registros s
-              WHERE s.dni = r.dni
-                AND s.es_entrada = FALSE
-                AND s.fecha_hora > r.fecha_hora
-                AND s.fecha_hora < COALESCE((
-                  SELECT MIN(e.fecha_hora) FROM registros e
-                  WHERE e.dni = r.dni
-                    AND e.es_entrada = TRUE
-                    AND e.fecha_hora > r.fecha_hora
-                ), 'infinity'::timestamptz)
+              SELECT 1 FROM registros m
+              WHERE m.dni = r.dni AND m.fecha_hora > r.fecha_hora
             )
           )
         )
@@ -1867,17 +1869,12 @@ export async function getProveedoresSinSalida(dias = 15): Promise<RegistroInform
       WHERE r.tipo = 'proveedor'
         AND r.es_entrada = TRUE
         AND r.fecha_hora > NOW() - (${dias} || ' days')::interval
+        -- Abierta solo si es el ultimo movimiento del DNI. Ver el comentario
+        -- en getRegistrosFiltrados: el emparejamiento por ventana dejaba
+        -- huerfanas las entradas duplicadas.
         AND NOT EXISTS (
-          SELECT 1 FROM registros s
-          WHERE s.dni = r.dni
-            AND s.es_entrada = FALSE
-            AND s.fecha_hora > r.fecha_hora
-            AND s.fecha_hora < COALESCE((
-              SELECT MIN(e.fecha_hora) FROM registros e
-              WHERE e.dni = r.dni
-                AND e.es_entrada = TRUE
-                AND e.fecha_hora > r.fecha_hora
-            ), 'infinity'::timestamptz)
+          SELECT 1 FROM registros m
+          WHERE m.dni = r.dni AND m.fecha_hora > r.fecha_hora
         )
       ORDER BY r.fecha_hora DESC
       LIMIT 100
