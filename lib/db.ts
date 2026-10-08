@@ -310,6 +310,44 @@ async function createTables() {
   await backfillPersonas(sql);
   await consolidarFotos(sql);
   await backfillRegistroLotes(sql);
+  await repararTipoDeIngreso(sql);
+}
+
+/**
+ * Repara los ingresos guardados con un motivo invalido.
+ *
+ * `tipo` nombraba dos cosas distintas: el tipo de autorizacion
+ * (permanente / temporal) y el motivo del ingreso (visita / proveedor). Al
+ * buscar una persona autorizada se cargaba el primero en el desplegable del
+ * segundo, y se terminaba guardando "permanente" o "temporal" en la bitacora.
+ * Esos ingresos no coincidian con ningun filtro ni aparecian en los informes
+ * de proveedores.
+ *
+ * El valor original no se puede recuperar. Se usa el unico indicio que quedo:
+ * si tiene rubro cargado era un proveedor; si no, se asume visita.
+ */
+async function repararTipoDeIngreso(sql: ReturnType<typeof getSql>) {
+  const invalidos = (await sql`
+    SELECT 1 FROM registros
+    WHERE tipo NOT IN ('visita', 'proveedor')
+    LIMIT 1
+  `) as any[];
+  if (invalidos.length === 0) return;
+
+  await sql`
+    UPDATE registros
+    SET tipo = CASE
+      WHEN COALESCE(subtipo, '') <> '' THEN 'proveedor'
+      ELSE 'visita'
+    END
+    WHERE tipo NOT IN ('visita', 'proveedor')
+  `;
+
+  // Un rubro sin proveedor tampoco tiene sentido.
+  await sql`
+    UPDATE registros SET subtipo = NULL
+    WHERE tipo <> 'proveedor' AND COALESCE(subtipo, '') <> ''
+  `;
 }
 
 /**

@@ -32,6 +32,29 @@ export const MEDIOS_AUTORIZACION = [
   { valor: "presencial", etiqueta: "Presencial" },
 ] as const;
 
+/**
+ * Devuelve un motivo de ingreso valido.
+ *
+ * Existe porque `tipo` nombra dos cosas distintas en el sistema:
+ *   autorizados.tipo -> permanente / temporal  (tipo de autorizacion)
+ *   registros.tipo   -> visita / proveedor     (motivo del ingreso)
+ *
+ * Los dos se mezclaron y llegaron a guardarse valores como "permanente" en la
+ * bitacora, que despues no coincidian con ningun filtro. Todo lo que entra o
+ * sale pasa por aca para que no vuelva a ocurrir.
+ */
+export function tipoVisitaValido(valor?: string): "visita" | "proveedor" {
+  const t = String(valor || "").trim().toLowerCase();
+  return t === "proveedor" ? "proveedor" : "visita";
+}
+
+/** El rubro solo tiene sentido en un proveedor. */
+export function rubroValido(tipo: string | undefined, subtipo: string | undefined): string {
+  if (tipoVisitaValido(tipo) !== "proveedor") return "";
+  const s = String(subtipo || "").trim();
+  return RUBROS_PROVEEDOR.some((r) => r.valor === s) ? s : "";
+}
+
 function buscarEtiqueta(lista: readonly { valor: string; etiqueta: string }[], valor?: string) {
   if (!valor) return "";
   return lista.find((x) => x.valor === valor)?.etiqueta || valor;

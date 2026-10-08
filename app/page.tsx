@@ -248,6 +248,8 @@ function PantallaAccesos() {
       nombre: r.persona.nombre,
       apellido: r.persona.apellido,
       dni: r.persona.dni,
+      // Vienen del último ingreso: si entró como proveedor vuelve como
+      // proveedor, con su rubro, hasta que alguien lo cambie.
       tipo: r.persona.tipo === "residente" ? "visita" : r.persona.tipo || "visita",
       subtipo: r.subtipoPrevio || "",
       patente: base?.patente || r.persona.patente || "",

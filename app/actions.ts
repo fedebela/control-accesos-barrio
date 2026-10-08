@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { ensureTables, getSql } from "@/lib/db";
 import { exigirGestion, getSesionResidente } from "@/app/actions-auth";
 import { auditar } from "@/lib/auditoria";
+import { tipoVisitaValido, rubroValido } from "@/lib/constantes";
 
 // ========== TYPES ==========
 
@@ -1312,7 +1313,11 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       nombre: identidad?.nombre || residente?.nombre || auth?.nombre || ultimoRegistro?.nombre || "",
       apellido: identidad?.apellido || residente?.apellido || auth?.apellido || ultimoRegistro?.apellido || "",
       dni: dniLimpio,
-      tipo: residente ? "residente" : auth?.tipo || ultimoRegistro?.tipo || "visita",
+      // OJO: aca va el motivo del ingreso (visita / proveedor), NO el tipo de
+      // autorizacion. Antes se usaba auth.tipo y terminaba cargando
+      // "permanente" en el desplegable de motivo, que lo guardaba asi en la
+      // bitacora y dejaba esos ingresos fuera de todos los filtros.
+      tipo: residente ? "residente" : tipoVisitaValido(ultimoRegistro?.tipo),
       lote: auth?.lote || residente?.lote || ultimoRegistro?.lote_destino || "",
       patente: ultimoRegistro?.patente || auth?.patente || "",
       observaciones: auth?.observaciones || ultimoRegistro?.observaciones || "",
@@ -1359,7 +1364,11 @@ export async function searchPersona(dni: string): Promise<ResultadoBusqueda> {
       lotesUltimaEntrada,
       lotesUltimoRegistro,
       apellidosDeLotes,
-      subtipoPrevio: ultimaEntrada?.subtipo || ultimoRegistro?.subtipo || "",
+      // El rubro se repite solo si el ultimo ingreso fue de un proveedor.
+      subtipoPrevio: rubroValido(
+        ultimaEntrada?.tipo || ultimoRegistro?.tipo,
+        ultimaEntrada?.subtipo || ultimoRegistro?.subtipo
+      ),
       lotesAutorizados,
       // Si el ultimo movimiento fue una entrada, la persona figura adentro.
       adentroDesde: ultimoRegistro?.es_entrada ? ultimoRegistro.fecha_hora : null,
@@ -1483,8 +1492,9 @@ export async function registrarMovimiento(prevState: any, formData: FormData) {
   const nombre = String(formData.get("nombre") || "").trim();
   const apellido = String(formData.get("apellido") || "").trim();
   const dni = String(formData.get("dni") || "").trim();
-  const tipo = String(formData.get("tipo") || "visita").trim();
-  const subtipo = String(formData.get("subtipo") || "").trim();
+  // Se sanean para que un valor invalido no llegue nunca a la bitacora.
+  const tipo = tipoVisitaValido(String(formData.get("tipo") || ""));
+  const subtipo = rubroValido(tipo, String(formData.get("subtipo") || ""));
   const vehiculo_tipo = String(formData.get("vehiculo_tipo") || "").trim();
   const patente = String(formData.get("patente") || "").trim().toUpperCase();
   const residente_nombre = String(formData.get("residente_nombre") || "").trim();
